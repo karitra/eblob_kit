@@ -1,0 +1,5 @@
+eblob-kit (0.0.1) unstable; urgency=low
+
+  * First alpha version of the toolkit for eblob blobs
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Sat, 20 Feb 2016 13:27:50 +0400
