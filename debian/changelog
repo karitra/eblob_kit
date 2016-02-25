@@ -1,3 +1,9 @@
+eblob-kit (0.0.2) unstable; urgency=low
+
+  * Fix determination of index/blob mismatch.
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Thu, 25 Feb 2016 22:07:53 +0400
+
 eblob-kit (0.0.1) unstable; urgency=low
 
   * First alpha version of the toolkit for eblob blobs
