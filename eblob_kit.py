@@ -528,7 +528,7 @@ class BlobRepairer(object):
                 self.corrupted_data_headers, sizeof_fmt(self.corrupted_data_headers_size))
         print_error(report)
 
-        if not self.index_headers:
+        if not self.index_headers and not self.index_removed_headers:
             print_error('{} does not match {}'.format(self.blob.index.path,
                                                       self.blob.data.path))
 
@@ -726,7 +726,7 @@ class BlobRepairer(object):
         if self.valid:
             return
 
-        if not self.index_headers:
+        if not self.index_headers and not self.index_removed_headers:
             if click.confirm('There is no valid header in {}. '
                              'Should I try to recover index from {}?'
                              .format(self.blob.index.path, self.blob.data.path),
@@ -737,7 +737,7 @@ class BlobRepairer(object):
                                default=True):
                 self.recover_blob(destination)
         else:
-            if click.confirm('I can repair {}?'.format(self.blob.data.path),
+            if click.confirm('Should I repair {}?'.format(self.blob.data.path),
                              default=True):
                 self.copy_valid_records(destination)
 
