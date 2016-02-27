@@ -727,7 +727,7 @@ class BlobRepairer(object):
         click.echo('I have copied {} ({}) records {} -> {} '.format(
             copied_records, sizeof_fmt(copied_size), self.blob.data.path, blob_path))
 
-    def fix(self, destination):
+    def fix(self, destination, noprompt):
         """Check blob's data & index and try to fix them if they are broken."""
         self.check(True)
 
@@ -735,18 +735,20 @@ class BlobRepairer(object):
             return
 
         if not self.index_headers and not self.index_removed_headers:
-            if click.confirm('There is no valid header in {}. '
-                             'Should I try to recover index from {}?'
-                             .format(self.blob.index.path, self.blob.data.path),
-                             default=True):
+            if noprompt:
+                self.recover_blob(destination)
+            elif click.confirm('There is no valid header in {}. '
+                               'Should I try to recover index from {}?'
+                               .format(self.blob.index.path, self.blob.data.path),
+                               default=True):
                 self.recover_index(self.blob.data, destination)
             elif click.confirm('Should I try to recover both index and data from {}?'
                                .format(self.blob.data.path),
                                default=True):
                 self.recover_blob(destination)
         else:
-            if click.confirm('Should I repair {}?'.format(self.blob.data.path),
-                             default=True):
+            if noprompt or click.confirm('Should I repair {}?'.format(self.blob.data.path),
+                                         default=True):
                 self.copy_valid_records(destination)
 
 
@@ -819,24 +821,28 @@ def fix_index_command(path, destination):
 @click.argument('path')
 @click.option('-d', '--destination', prompt='Where should I place results?',
               help='d for destination')
-def fix_blob_command(path, destination):
+@click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
+              help='Assume Yes to all queries and do not prompt')
+def fix_blob_command(path, destination, noprompt):
     """Fix one blob @PATH."""
     if not os.path.exists(destination):
         os.mkdir(destination)
 
-    BlobRepairer(path).fix(destination)
+    BlobRepairer(path).fix(destination, noprompt)
 
 
 @cli.command(name='fix')
 @click.argument('path')
 @click.option('-d', '--destination', prompt='Where should I place results?',
               help='d for destination')
+@click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
+              help='Assume Yes to all queries and do not prompt')
 @click.pass_context
-def fix_command(ctx, path, destination, step_over):
+def fix_command(ctx, path, destination, noprompt):
     """Fix blobs @PATH."""
     for blob in files(path):
         try:
-            ctx.invoke(fix_blob_command, path=blob, destination=destination)
+            ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt)
         except Exception as exc:
             print_error('Failed to fix {}: {} '.format(blob, exc))
 
