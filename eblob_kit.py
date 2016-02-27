@@ -714,6 +714,8 @@ class BlobRepairer(object):
         copied_records = 0
         copied_size = 0
 
+        self.index_headers += self.data_recoverable_headers
+
         with click.progressbar(iter(self.index_headers),
                                length=len(self.index_headers),
                                label='Recovering blob {} -> {}'
