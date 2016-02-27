@@ -1,3 +1,11 @@
+eblob-kit (0.0.3) unstable; urgency=low
+
+  * extend report after check:
+  * recover records which are missed in index
+  * add '-y/--yes' option to fix/fix_blob commands:
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Sat, 27 Feb 2016 22:41:16 +0400
+
 eblob-kit (0.0.2) unstable; urgency=low
 
   * Fix determination of index/blob mismatch.
