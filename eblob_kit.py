@@ -501,11 +501,16 @@ class BlobRepairer(object):
     def print_check_report(self):
         """Print report after check."""
         if self.valid:
-            click.secho('{} is valid'.format(self.blob.data.path), bold=True)
+            report = '{} is valid and has:'.format(self.blob.data.path)
+            report += '\n\t{} valid records'.format(len(self.index_headers))
+            report += '\n\t{} removed records ({})'.format(self.index_removed_headers,
+                                                           sizeof_fmt(self.index_removed_headers_size))
+            click.secho(report, bold=True)
             return
 
         report = '{} has:'.format(self.blob.data.path)
-        report += '\n\t{} headers from index are valid'.format(len(self.index_headers))
+        report += '\n\t{} headers ({}) from index are valid'.format(
+            len(self.index_headers), sizeof_fmt(sum(h.disk_size for h in self.index_headers)))
         if self.index_removed_headers:
             report += '\n\t{} headers ({}) from index are valid and marked as removed'.format(
                 self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
@@ -515,8 +520,9 @@ class BlobRepairer(object):
                 len(self.mismatched_headers))
 
         if self.data_recoverable_headers:
-            report += '\n\t{} headers can be recovered from data'.format(
-                len(self.data_recoverable_headers))
+            report += '\n\t{} headers ({}) can be recovered from data'.format(
+                len(self.data_recoverable_headers),
+                sizeof_fmt(sum(h.disk_size for h in self.data_recoverable_headers)))
         if self.holes:
             report += '\n\t{} holes ({}) in blob which are not marked'.format(
                 self.holes, sizeof_fmt(self.holes_size))
