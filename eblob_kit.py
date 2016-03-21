@@ -336,6 +336,8 @@ class BlobRepairer(object):
         self.corrupted_data_headers_size = 0
         self.index_removed_headers = 0
         self.index_removed_headers_size = 0
+        self.index_uncommitted_headers = 0
+        self.index_uncommitted_headers_size = 0
         self.data_recoverable_headers = []
         self.mismatched_headers = []
         self.holes = 0
@@ -410,7 +412,7 @@ class BlobRepairer(object):
             else:
                 logging.info('I have found valid header at position %d in data and '
                              'will add it to headers list', position)
-                if not data_header.flags.removed:
+                if not data_header.flags.removed and not data_header.flags.uncommitted:
                     self.data_recoverable_headers.append(data_header)
                 position += data_header.disk_size
 
@@ -503,8 +505,10 @@ class BlobRepairer(object):
         if self.valid:
             report = '{} is valid and has:'.format(self.blob.data.path)
             report += '\n\t{} valid records'.format(len(self.index_headers))
-            report += '\n\t{} removed records ({})'.format(self.index_removed_headers,
-                                                           sizeof_fmt(self.index_removed_headers_size))
+            report += '\n\t{} removed records ({})'.format(
+                self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
+            report += '\n\t{} uncommitted records ({})'.format(
+                self.index_uncommitted_headers, sizeof_fmt(self.index_uncommitted_headers_size))
             click.secho(report, bold=True)
             return
 
@@ -514,6 +518,9 @@ class BlobRepairer(object):
         if self.index_removed_headers:
             report += '\n\t{} headers ({}) from index are valid and marked as removed'.format(
                 self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
+        if self.index_uncommitted_headers:
+            report += '\n\t headers ({}) from index are valid and marked as uncommitted'.format(
+                self.index_uncommitted_headers, sizeof_fmt(self.index_uncommitted_headers_size))
 
         if self.mismatched_headers:
             report += '\n\t{} headers which are different in the blob and in the index'.format(
@@ -534,7 +541,9 @@ class BlobRepairer(object):
                 self.corrupted_data_headers, sizeof_fmt(self.corrupted_data_headers_size))
         print_error(report)
 
-        if not self.index_headers and not self.index_removed_headers:
+        if (not self.index_headers and
+                not self.index_removed_headers and
+                not self.index_uncommitted_headers):
             print_error('{} does not match {}'.format(self.blob.index.path,
                                                       self.blob.data.path))
 
@@ -631,7 +640,13 @@ class BlobRepairer(object):
 
                 data_header = self.blob.data.read_header(index_header.position)
                 if index_header == data_header:
-                    if not index_header.flags.removed:
+                    if index_header.flags.removed:
+                        self.index_removed_headers += 1
+                        self.index_removed_headers_size += index_header.disk_size
+                    elif index_header.flags.uncommitted:
+                        self.index_uncommitted_headers += 1
+                        self.index_uncommitted_headers_size += index_header.disk_size
+                    else:
                         if verify_csum:
                             if self.verify_csum(index_header):
                                 valid_headers.append(index_header)
@@ -640,9 +655,6 @@ class BlobRepairer(object):
                                 self.corrupted_data_headers_size += index_header.disk_size
                         else:
                             valid_headers.append(index_header)
-                    else:
-                        self.index_removed_headers += 1
-                        self.index_removed_headers_size += index_header.disk_size
                 else:
                     self.resolve_mismatch(index_header, data_header, valid_headers)
                 position = index_header.position + index_header.disk_size
@@ -734,7 +746,9 @@ class BlobRepairer(object):
         if self.valid:
             return
 
-        if not self.index_headers and not self.index_removed_headers:
+        if (not self.index_headers and
+                not self.index_removed_headers and
+                not self.index_uncommitted_headers):
             if noprompt:
                 self.recover_blob(destination)
             elif click.confirm('There is no valid header in {}. '
