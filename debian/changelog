@@ -1,3 +1,10 @@
+eblob-kit (0.0.5) unstable; urgency=low
+
+  * Create empty file with '.should_be_removed'
+  * Set correct exit code in check commands
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Mon, 21 Mar 2016 18:24:54 +0400
+
 eblob-kit (0.0.4) unstable; urgency=low
 
   * Verify, count and recover corrupted data as is
