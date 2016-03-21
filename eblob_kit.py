@@ -763,8 +763,15 @@ class BlobRepairer(object):
                                default=True):
                 self.recover_blob(destination)
         else:
-            if noprompt or click.confirm('Should I repair {}?'.format(self.blob.data.path),
-                                         default=True):
+            if not self.index_headers:
+                print_error('Nothing can be recovered from {}, so it should be removed'
+                            .format(self.blob.data.path))
+                filname = '{}.should_be_removed'.format(
+                    os.path.join(destination, os.path.basename(self.blob.data.path)))
+                with open(filname, 'wb'):
+                    pass
+            elif noprompt or click.confirm('Should I repair {}?'.format(self.blob.data.path),
+                                           default=True):
                 self.copy_valid_records(destination)
 
 
