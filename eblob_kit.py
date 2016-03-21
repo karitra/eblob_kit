@@ -667,6 +667,8 @@ class BlobRepairer(object):
 
         self.print_check_report()
 
+        return self.valid
+
     @staticmethod
     def recover_index(data, destination):
         """Recover index from data."""
@@ -768,7 +770,8 @@ class BlobRepairer(object):
 
 @click.group()
 @click.version_option(version='0.0.1')
-def cli():
+@click.pass_context
+def cli(ctx):
     """eblob_kit is the tool for diagnosing, recovering and listing blobs."""
 
 
@@ -804,10 +807,15 @@ def list_command(ctx, path):
 @cli.command(name='check_blob')
 @click.argument('path')
 @click.option('-V', '--verify-csum', is_flag=True, default=False, help='V for verify checksum')
-def check_blob_command(path, verify_csum):
+@click.pass_context
+def check_blob_command(ctx, path, verify_csum):
     """Check that blob (its data and index) is correct."""
     try:
-        BlobRepairer(path).check(verify_csum)
+        result = BlobRepairer(path).check(verify_csum)
+        if 'result' in ctx.obj:
+            ctx.obj['result'] &= result
+        else:
+            ctx.exit(not result)
     except IOError as exc:
         print_error('I have failed to open {}: {}'.format(path, exc))
 
@@ -818,8 +826,10 @@ def check_blob_command(path, verify_csum):
 @click.pass_context
 def check_command(ctx, path, verify_csum):
     """Check that all blobs (datas and indexes) are correct."""
+    ctx.obj['result'] = True
     for blob_path in files(path):
         ctx.invoke(check_blob_command, path=blob_path, verify_csum=verify_csum)
+    ctx.exit(not ctx.obj['result'])
 
 
 @cli.command(name='fix_index')
@@ -861,4 +871,4 @@ def fix_command(ctx, path, destination, noprompt):
             print_error('Failed to fix {}: {} '.format(blob, exc))
 
 if __name__ == '__main__':
-    cli()
+    cli(obj={})
