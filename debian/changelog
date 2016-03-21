@@ -1,3 +1,10 @@
+eblob-kit (0.0.4) unstable; urgency=low
+
+  * Verify, count and recover corrupted data as is
+  * Do not copy uncommitted records
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Mon, 21 Mar 2016 13:50:45 +0400
+
 eblob-kit (0.0.3) unstable; urgency=low
 
   * extend report after check:
