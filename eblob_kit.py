@@ -131,12 +131,12 @@ class IndexFile(object):
             self.sorted = False
         else:
             raise RuntimeError('{} is not index'.format(path))
-        self._file = open(path, 'r+')
+        self._file = open(path, 'rb')
 
     @staticmethod
     def create(path):
         """Create IndexFile for @path."""
-        open(path, 'a').close()
+        open(path, 'ab').close()
         return IndexFile(path)
 
     @property
@@ -182,7 +182,7 @@ class DataFile(object):
         """Initialize DataFile object again @path."""
         self.sorted = os.path.exists(path + '.data_is_sorted') and \
             os.path.exists(path + '.index.sorted')
-        self._file = open(path, 'r+')
+        self._file = open(path, 'rb')
 
     @property
     def path(self):
@@ -245,8 +245,8 @@ class Blob(object):
     @staticmethod
     def create(path):
         """Create new Blob at @path."""
-        open(path + '.index', 'a').close()
-        open(path, 'a').close()
+        open(path + '.index', 'ab').close()
+        open(path, 'ab').close()
         return Blob(path)
 
     @property
