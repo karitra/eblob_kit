@@ -776,7 +776,7 @@ class BlobRepairer(object):
 
 
 @click.group()
-@click.version_option(version='0.0.5')
+@click.version_option()
 @click.pass_context
 def cli(ctx):
     """eblob_kit is the tool for diagnosing, recovering and listing blobs."""
