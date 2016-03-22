@@ -1,3 +1,11 @@
+eblob-kit (0.0.6) unstable; urgency=low
+
+  * Make workaround to call cli with not empty context
+  * Allow click to autodiscover version
+  * Change open file mode
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Tue, 22 Mar 2016 11:03:17 +0400
+
 eblob-kit (0.0.5) unstable; urgency=low
 
   * Create empty file with '.should_be_removed'

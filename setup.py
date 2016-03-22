@@ -3,7 +3,7 @@
 from setuptools import setup
 
 setup(name='eblob_kit',
-      version='0.0.5',
+      version='0.0.6',
       author='Kirill Smorodinnikov',
       author_email='shaitkir@gmail.com',
       py_modules=['eblob_kit'],
