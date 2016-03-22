@@ -877,5 +877,10 @@ def fix_command(ctx, path, destination, noprompt):
         except Exception as exc:
             print_error('Failed to fix {}: {} '.format(blob, exc))
 
-if __name__ == '__main__':
+
+def main():
+    """Main function."""
     cli(obj={})
+
+if __name__ == '__main__':
+    main()

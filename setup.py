@@ -10,5 +10,5 @@ setup(name='eblob_kit',
       install_requires=['Click', 'pyhash'],
       entry_points='''
           [console_scripts]
-          eblob_kit=eblob_kit:cli
+          eblob_kit=eblob_kit:main
       ''')
