@@ -123,7 +123,7 @@ class DiskControl(object):
 class IndexFile(object):
     """Abstraction to index file."""
 
-    def __init__(self, path):
+    def __init__(self, path, readonly=True):
         """Initialize IndexFile object again @path."""
         if path.endswith('.index.sorted'):
             self.sorted = True
@@ -131,13 +131,13 @@ class IndexFile(object):
             self.sorted = False
         else:
             raise RuntimeError('{} is not index'.format(path))
-        self._file = open(path, 'rb')
+        self._file = open(path, 'rb' if readonly else 'ab')
 
     @staticmethod
     def create(path):
         """Create IndexFile for @path."""
         open(path, 'ab').close()
-        return IndexFile(path)
+        return IndexFile(path, False)
 
     @property
     def path(self):
@@ -178,11 +178,11 @@ class IndexFile(object):
 class DataFile(object):
     """Abstraction to data file."""
 
-    def __init__(self, path):
+    def __init__(self, path, readonly=True):
         """Initialize DataFile object again @path."""
         self.sorted = os.path.exists(path + '.data_is_sorted') and \
             os.path.exists(path + '.index.sorted')
-        self._file = open(path, 'rb')
+        self._file = open(path, 'rb' if readonly else 'ab')
 
     @property
     def path(self):
@@ -232,22 +232,22 @@ class DataFile(object):
 class Blob(object):
     """Abstraction to blob consisted from index and data files."""
 
-    def __init__(self, path):
+    def __init__(self, path, readonly=True):
         """Initialize Blob object again @path."""
         if os.path.exists(path + '.index.sorted'):
-            self._index_file = IndexFile(path + '.index.sorted')
+            self._index_file = IndexFile(path + '.index.sorted', readonly)
         elif os.path.exists(path + '.index'):
-            self._index_file = IndexFile(path + '.index')
+            self._index_file = IndexFile(path + '.index', readonly)
         else:
             raise IOError('Could not find index for {}'.format(path))
-        self._data_file = DataFile(path)
+        self._data_file = DataFile(path, readonly)
 
     @staticmethod
     def create(path):
         """Create new Blob at @path."""
         open(path + '.index', 'ab').close()
         open(path, 'ab').close()
-        return Blob(path)
+        return Blob(path, False)
 
     @property
     def index(self):
