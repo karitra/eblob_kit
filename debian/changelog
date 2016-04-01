@@ -1,3 +1,9 @@
+eblob-kit (0.0.7) unstable; urgency=low
+
+  * Fix opening filled blobs in read-only mode
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Fri, 01 Apr 2016 10:54:50 +0400
+
 eblob-kit (0.0.6) unstable; urgency=low
 
   * Make workaround to call cli with not empty context
