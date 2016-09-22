@@ -1,3 +1,10 @@
+eblob-kit (0.0.8) unstable; urgency=medium
+
+  * Do not count corrupted keys as valid
+  * Fix typo
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Thu, 22 Sep 2016 16:24:15 +0300
+
 eblob-kit (0.0.7) unstable; urgency=low
 
   * Fix opening filled blobs in read-only mode
