@@ -519,7 +519,7 @@ class BlobRepairer(object):
             report += '\n\t{} headers ({}) from index are valid and marked as removed'.format(
                 self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
         if self.index_uncommitted_headers:
-            report += '\n\t headers ({}) from index are valid and marked as uncommitted'.format(
+            report += '\n\t{} headers ({}) from index are valid and marked as uncommitted'.format(
                 self.index_uncommitted_headers, sizeof_fmt(self.index_uncommitted_headers_size))
 
         if self.mismatched_headers:
