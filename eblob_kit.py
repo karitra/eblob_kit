@@ -651,8 +651,9 @@ class BlobRepairer(object):
                             if not self.verify_csum(index_header):
                                 self.corrupted_data_headers += 1
                                 self.corrupted_data_headers_size += index_header.disk_size
-
-                            valid_headers.append(index_header)
+                                self.valid = False
+                            else:
+                                valid_headers.append(index_header)
                         else:
                             valid_headers.append(index_header)
                 else:
