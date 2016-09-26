@@ -164,11 +164,9 @@ class IndexFile(object):
     def __iter__(self):
         """Iterate over headers in the index."""
         self._file.seek(0)
-        while True:
-            offset = self._file.tell()
-            data = self._file.read(DiskControl.size)
-            if len(data) == 0:
-                break
+        index_content = self._file.read()
+        for offset in xrange(0, len(index_content), DiskControl.size):
+            data = index_content[offset: offset + DiskControl.size]
             if len(data) != DiskControl.size:
                 raise EOFError('Failed to read header at offset {} of {} ({})'
                                .format(offset, self.path, self.size()))
@@ -789,7 +787,7 @@ def list_index_command(path):
     """List index file specified by @PATH."""
     assert os.path.exists(path), 'Failed to listing index: {}: file does not exist'.format(path)
     for header in IndexFile(path):
-        click.echo(header)
+        print header
 
 
 @cli.command(name='list_data')
@@ -798,7 +796,7 @@ def list_data_command(path):
     """List data file specified by @PATH."""
     assert os.path.exists(path), 'Failed to listing data: {}: failed does not exist'.format(path)
     for header in DataFile(path):
-        click.echo(header)
+        print header
 
 
 @cli.command(name='list')
