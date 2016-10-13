@@ -458,7 +458,7 @@ class BlobRepairer(object):
         logging.error('Headers mismatches: data_header: %s, index_header: %s',
                       data_header, index_header)
 
-    def check_index(self):
+    def check_index(self, fast):
         """Check that index file is correct."""
         prev_key = None
         try:
@@ -466,6 +466,9 @@ class BlobRepairer(object):
             with click.progressbar(length=len(self.blob.index),
                                    label='Checking {}'.format(self.blob.index.path)) as pbar:
                 for index, header in enumerate(self.blob.index, 1):
+                    if fast and not self.valid:
+                        # return if it is fast-check and there was an error
+                        return
                     if self.check_header(header):
                         self.index_headers.append(header)
                         if prev_key and self.blob.index.sorted:
@@ -489,6 +492,9 @@ class BlobRepairer(object):
             self.invalid_index_size = True
             self.valid = False
 
+        if fast and not self.valid:
+            return
+
         if self.index_order_error:
             print_error('{} is supposed to be sorted, but it has disordered headers'.format(
                 self.blob.index.path))
@@ -500,7 +506,8 @@ class BlobRepairer(object):
             logging.info('All %d headers in %s are valid',
                          len(self.index_headers), self.blob.index.path)
 
-        self.index_headers = sorted(self.index_headers, key=lambda h: h.position)
+        if not fast:
+            self.index_headers = sorted(self.index_headers, key=lambda h: h.position)
 
     def print_check_report(self):
         """Print report after check."""
@@ -622,9 +629,12 @@ class BlobRepairer(object):
         else:
             return self.verify_sha15(header)
 
-    def check(self, verify_csum):
+    def check(self, verify_csum, fast):
         """Check that both index and data files are correct."""
-        self.check_index()
+        self.check_index(fast=fast)
+
+        if fast:
+            return self.valid
 
         valid_headers = []
 
@@ -672,8 +682,6 @@ class BlobRepairer(object):
                 self.check_hole(position, len(self.blob.data))
 
         self.index_headers = valid_headers
-
-        self.print_check_report()
 
         return self.valid
 
@@ -751,7 +759,8 @@ class BlobRepairer(object):
 
     def fix(self, destination, noprompt):
         """Check blob's data & index and try to fix them if they are broken."""
-        self.check(True)
+        self.check(verify_csum=True, fast=False)
+        self.print_check_report()
 
         if self.valid:
             return
@@ -822,11 +831,15 @@ def list_command(ctx, path):
 @cli.command(name='check_blob')
 @click.argument('path')
 @click.option('-V', '--verify-csum', is_flag=True, default=False, help='V for verify checksum')
+@click.option('-f', '--fast', is_flag=True, default=False, help='Quickly check blob')
 @click.pass_context
-def check_blob_command(ctx, path, verify_csum):
+def check_blob_command(ctx, path, verify_csum, fast):
     """Check that blob (its data and index) is correct."""
     try:
-        result = BlobRepairer(path).check(verify_csum)
+        repairer = BlobRepairer(path)
+        result = repairer.check(verify_csum=verify_csum, fast=fast)
+        if not result or not fast:
+            repairer.print_check_report()
         if 'result' in ctx.obj:
             ctx.obj['result'] &= result
         else:
@@ -838,12 +851,13 @@ def check_blob_command(ctx, path, verify_csum):
 @cli.command(name='check')
 @click.argument('path')
 @click.option('-V', '--verify-csum', is_flag=True, default=False, help='V for verify checksum')
+@click.option('-f', '--fast', is_flag=True, default=False, help='Quickly check blob')
 @click.pass_context
-def check_command(ctx, path, verify_csum):
+def check_command(ctx, path, verify_csum, fast):
     """Check that all blobs (datas and indexes) are correct."""
     ctx.obj['result'] = True
     for blob_path in files(path):
-        ctx.invoke(check_blob_command, path=blob_path, verify_csum=verify_csum)
+        ctx.invoke(check_blob_command, path=blob_path, verify_csum=verify_csum, fast=fast)
     ctx.exit(not ctx.obj['result'])
 
 
