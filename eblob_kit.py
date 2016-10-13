@@ -462,9 +462,10 @@ class BlobRepairer(object):
         """Check that index file is correct."""
         prev_key = None
         try:
-            with click.progressbar(iter(self.blob.index), length=len(self.blob.index),
+            stat_chunk = 1 << 15
+            with click.progressbar(length=len(self.blob.index),
                                    label='Checking {}'.format(self.blob.index.path)) as pbar:
-                for header in pbar:
+                for index, header in enumerate(self.blob.index, 1):
                     if self.check_header(header):
                         self.index_headers.append(header)
                         if prev_key and self.blob.index.sorted:
@@ -476,6 +477,9 @@ class BlobRepairer(object):
                     else:
                         self.index_malformed_headers += 1
                         self.valid = False
+                    if index % stat_chunk == 0:
+                        pbar.update(stat_chunk)
+                pbar.update(stat_chunk)
         except EOFError as exc:
             print_error('{} has incorrect size ({}) which is not a multiple '
                         'of DiskControl.size ({}). Last incomplete header ({}) will be ignored.'
@@ -624,11 +628,11 @@ class BlobRepairer(object):
 
         valid_headers = []
 
-        with click.progressbar(enumerate(self.index_headers),
-                               length=len(self.index_headers),
+        stat_chunk = 1 << 15
+        with click.progressbar(length=len(self.index_headers),
                                label='Checking: {}'.format(self.blob.data.path)) as pbar:
             position = 0
-            for header_idx, index_header in pbar:
+            for header_idx, index_header in enumerate(self.index_headers):
                 if position > index_header.position:
                     self.resolve_mispositioned_record(header_idx, position, valid_headers)
 
@@ -657,6 +661,11 @@ class BlobRepairer(object):
                 else:
                     self.resolve_mismatch(index_header, data_header, valid_headers)
                 position = index_header.position + index_header.disk_size
+
+                if (header_idx + 1) % stat_chunk == 0:
+                    pbar.update(stat_chunk)
+
+            pbar.update(stat_chunk)
 
             if position < len(self.blob.data):
                 self.valid = False
