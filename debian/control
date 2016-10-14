@@ -2,12 +2,17 @@ Source: eblob-kit
 Maintainer: Kirill Smorodinnikov <shaitkir@gmail.com>
 Section: python
 Priority: optional
-Build-Depends: python-setuptools (>= 0.6b3), python-all (>= 2.6.6-3), debhelper (>= 7.4.3)
+Build-Depends: python-setuptools (>= 0.6b3),
+               python-all (>= 2.6.6-3),
+               debhelper (>= 7.4.3),
+               python-click (>= 5.1)
 Standards-Version: 3.9.1
 X-Python-Version: >= 2.7
 
 Package: eblob-kit
 Architecture: all
-Depends: ${misc:Depends}, ${python:Depends}
+Depends: ${misc:Depends},
+         ${python:Depends},
+         python-click (>= 5.1)
 Description: Toolkit for listing, checking and fixing eblob blobs.
 
