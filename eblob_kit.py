@@ -354,11 +354,11 @@ class BlobRepairer(object):
                           self.blob.data.path, len(self.blob.data), header)
             return False
 
-        if header.data_size == 0 and not header.flags.uncommitted:
-            logging.error('malformed header has empty data_size but it is committed: %s', header)
-            return False
+        if not header.flags.uncommitted and not header.flags.removed:
+            if header.data_size == 0:
+                logging.error('malformed header has empty data_size but it is committed: %s', header)
+                return False
 
-        if not header.flags.uncommitted:
             extension_header_size = ExtensionHeader.size if header.flags.exthdr else 0
             checksum_size = get_checksum_size(header)
 
