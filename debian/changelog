@@ -1,3 +1,9 @@
+eblob-kit (0.0.10) unstable; urgency=medium
+
+  * Add python-click >= 5.1 to depends
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Fri, 14 Oct 2016 12:23:19 +0300
+
 eblob-kit (0.0.9) unstable; urgency=medium
 
   * Add -f/--fast option to check and check_blob
