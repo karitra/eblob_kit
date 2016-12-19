@@ -961,7 +961,8 @@ def fix_command(ctx, path, destination, noprompt):
 @click.argument('path')
 @click.pass_context
 def find_duplicates_command(ctx, path):
-    find_duplicates(files(path))
+    duplicates = find_duplicates(files(path))
+    ctx.exit(len(duplicates))
 
 
 def main():
