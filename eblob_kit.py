@@ -828,7 +828,7 @@ def find_duplicates(blobs):
     for key in duplicates:
         logging.error('Found key: %s in blobs: %s', key.encode('hex'), set([path for path, _ in duplicates[key]]))
 
-    report = 'I have found {} keys which has {} duplicates'.format(
+    report = 'I have found {} keys which have {} duplicates'.format(
         len(duplicates),
         sum(len(value) - 1 for value in duplicates.itervalues())
     )
