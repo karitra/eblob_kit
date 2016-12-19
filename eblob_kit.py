@@ -790,6 +790,57 @@ class BlobRepairer(object):
                 self.copy_valid_records(destination)
 
 
+def find_duplicates(blobs):
+    """Find duplicates and return information about them."""
+    unique_keys = {}
+    duplicates = {}
+    for blob in blobs:
+        index_file = None
+        if os.path.exists(blob + '.index.sorted'):
+            index_file = IndexFile(blob + '.index.sorted', True)
+        elif os.path.exists(blob + '.index'):
+            index_file = IndexFile(blob + '.index', True)
+        else:
+            raise IOError('Could not find index for {}'.format(blob))
+
+        stat_chunk = 1 << 15
+        with click.progressbar(length=len(index_file),
+                               label='Iterating: {}'.format(index_file.path)) as pbar:
+            for header_idx, header in enumerate(index_file):
+                if (header_idx + 1) % stat_chunk == 0:
+                    pbar.update(stat_chunk)
+
+                if header.flags.removed:
+                    continue
+
+                info = index_file.path, header_idx
+
+                if header.key in duplicates:
+                    duplicates[header.key] += [info]
+                elif header.key in unique_keys:
+                    duplicates[header.key] = [unique_keys[header.key], info]
+                    del unique_keys[header.key]
+                else:
+                    unique_keys[header.key] = info
+
+            pbar.update(stat_chunk)
+
+    for key in duplicates:
+        logging.error('Found key: %s in blobs: %s', key.encode('hex'), set([path for path, _ in duplicates[key]]))
+
+    report = 'I have found {} keys which has {} duplicates'.format(
+        len(duplicates),
+        sum(len(value) - 1 for value in duplicates.itervalues())
+    )
+
+    if duplicates:
+        print_error(report)
+    else:
+        click.secho(report, bold=True)
+
+    return duplicates.itervalues()
+
+
 @click.group()
 @click.version_option()
 @click.pass_context
@@ -904,6 +955,13 @@ def fix_command(ctx, path, destination, noprompt):
             ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt)
         except Exception as exc:
             print_error('Failed to fix {}: {} '.format(blob, exc))
+
+
+@cli.command(name='find_duplicates')
+@click.argument('path')
+@click.pass_context
+def find_duplicates_command(ctx, path):
+    find_duplicates(files(path))
 
 
 def main():
