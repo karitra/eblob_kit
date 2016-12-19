@@ -3,19 +3,17 @@
 
 """Toolkit for working with eblob blobs."""
 
-import logging
-import glob
-import re
-import os
-import struct
-import hashlib
-
-import pyhash
 import click
+import glob
+import hashlib
+import logging
+import os
+import pyhash
+import re
+import struct
 
-logging.basicConfig(filename='log.log',
-                    format='%(asctime)s %(process)d %(levelname)s: %(message)s',
-                    level=logging.DEBUG)
+
+LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s: %(message)s'
 
 
 class ExtensionHeader(object):
@@ -795,8 +793,16 @@ class BlobRepairer(object):
 @click.group()
 @click.version_option()
 @click.pass_context
-def cli(ctx):
+@click.option('-l', '--log-file', default=None, help='File for logs')
+def cli(ctx, log_file):
     """eblob_kit is the tool for diagnosing, recovering and listing blobs."""
+    if log_file is None:
+        logging.basicConfig(format=LOG_FORMAT, level=logging.ERROR)
+    else:
+        dir_name = os.path.dirname(log_file)
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+        logging.basicConfig(filename=log_file, format=LOG_FORMAT, level=logging.INFO)
 
 
 @cli.command(name='list_index')
