@@ -1,3 +1,9 @@
+eblob-kit (0.0.13) unstable; urgency=medium
+
+  * Add find_duplicates command
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Mon, 19 Dec 2016 16:46:27 +0300
+
 eblob-kit (0.0.12) unstable; urgency=medium
 
   * Add -l/--log-file option to main cli
