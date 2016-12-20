@@ -1,3 +1,11 @@
+eblob-kit (0.0.14) unstable; urgency=medium
+
+  * Add remove_duplicates command
+  * find_duplicates: set exit code depending on found duplicates
+  * Fix typo
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Tue, 20 Dec 2016 13:57:08 +0300
+
 eblob-kit (0.0.13) unstable; urgency=medium
 
   * Add find_duplicates command
