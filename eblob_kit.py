@@ -12,14 +12,102 @@ import pyhash
 import re
 import struct
 
+from datetime import datetime
+from datetime import timedelta
+
 
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s: %(message)s'
 
 
-class ExtensionHeader(object):
+class Record(object):
+    """Represent record stored in blob."""
+    def __init__(self, blob, index_idx=None, index_disk_control=None, data_disk_control=None):
+        self._blob = blob
+        self._index_idx = index_idx
+        self._index_disk_control = index_disk_control
+        self._data_disk_control = data_disk_control
+        self._elliptics_header = None
+        self._json_header = None
+
+    @property
+    def index_disk_control(self):
+        """DiskControl from index file."""
+        # index_disk_control isn't available if neither index_disk_control or index_idx was specified
+        if self._index_disk_control is None and self._index_idx is not None:
+            self._index_disk_control = self._blob.index[self._index_idx]
+
+        return self._index_disk_control
+
+    @property
+    def data_disk_control(self):
+        """DiskControl from data file."""
+        if self._data_disk_control is None:
+            self._data_disk_control = self._blob.data.read_disk_control(self.index_disk_control.position)
+
+        return self._data_disk_control
+
+    @property
+    def elliptics_header(self):
+        """Elliptics header from data file."""
+        if self._elliptics_header is None:
+            if self.data_disk_control.flags.exthdr:
+                self._elliptics_header = self._blob.data.read_elliptics_header(self.data_disk_control.position)
+            else:
+                self._elliptics_header = EllipticsHeader('\0' * EllipticsHeader.size)
+
+        return self._elliptics_header
+
+    def verify_checksum(self):
+        """Verify record's checksum."""
+        self._blob.verify_csum(self.data_disk_control)
+
+    def mark_removed(self):
+        """Mark record as removed."""
+        logging.warning('Marking key: %s removed, in blob: "%s", with data-offset: %s, index-offset: %s',
+                        self.data_disk_control.key.encode('hex'),
+                        self._blob.data.path,
+                        self.data_disk_control.position,
+                        self._index_idx * DiskControl.size)
+
+        removed_flags = struct.pack('<Q', RecordFlags.REMOVED)
+        flags_offset = DiskControl.key_size
+
+        logging.warning('Updating index: %s, offset: %s, flags: %s', self._blob.index.path,
+                        (self._index_idx * DiskControl.size) + flags_offset, removed_flags.encode('hex'))
+
+        self._blob.index.file.seek((self._index_idx * DiskControl.size) + flags_offset)
+        self._blob.index.file.write(removed_flags)
+
+        logging.warning('Updating data: %s, offset: %s, flags: %s', self._blob.data.path,
+                        self.data_disk_control.position + flags_offset, removed_flags.encode('hex'))
+
+        self._blob.data.file.seek(self.data_disk_control.position + flags_offset)
+        self._blob.data.file.write(removed_flags)
+
+        index_disk_control = self._blob.index[self._index_idx]
+        data_disk_control = self._blob.data.read_disk_control(self.index_disk_control.position)
+
+        assert index_disk_control == data_disk_control
+        assert index_disk_control.flags.removed and data_disk_control.flags.removed
+
+
+class EllipticsHeader(object):
     """Elliptics extension header."""
 
     size = 48
+
+    def __init__(self, data):
+        assert len(data) == EllipticsHeader.size
+        raw = struct.unpack('<4BI5Q', data)
+        self.version = raw[0]
+        self.__pad1 = raw[1:4]
+        self.jhdr_size = raw[4]
+        self.timestamp = datetime.fromtimestamp(raw[5]) + timedelta(microseconds=raw[6]/1000)
+        self.user_flags = raw[7]
+        self.__pad2 = raw[8:]
+
+    def __str__(self):
+        return 'timestamp: {}, user_flags: {}, version: {}'.format(self.timestamp, self.user_flags, self.version)
 
 
 class RecordFlags(object):
@@ -83,12 +171,13 @@ class DiskControl(object):
     """Eblob record header."""
 
     size = 96
+    key_size = 64
 
     def __init__(self, data):
         """Initialize from raw @data and @offset."""
         assert len(data) == DiskControl.size
-        self.key = data[:64]
-        raw = struct.unpack('4Q', data[64:])
+        self.key = data[:self.key_size]
+        raw = struct.unpack('<4Q', data[self.key_size:])
         self.flags = RecordFlags(raw[0])
         self.data_size = raw[1]
         self.disk_size = raw[2]
@@ -97,8 +186,20 @@ class DiskControl(object):
     @property
     def raw_data(self):
         """Convert DiskControl to raw format."""
-        raw = struct.pack('4Q', self.flags.flags, self.data_size, self.disk_size, self.position)
+        raw = struct.pack('<4Q', self.flags.flags, self.data_size, self.disk_size, self.position)
         return self.key + raw
+
+    def to_dict(self):
+        return {
+            'key': self.key,
+            'position': self.position,
+            'data_size': self.data_size,
+            'disk_size': self.disk_size,
+            'flags': self.flags.flags,
+        }
+
+    def to_json(self):
+        return json.dumps(self.to_dict())
 
     def __nonzero__(self):
         """Return true if self is valid."""
@@ -121,7 +222,7 @@ class DiskControl(object):
 class IndexFile(object):
     """Abstraction to index file."""
 
-    def __init__(self, path, readonly=True):
+    def __init__(self, path, mode='rb'):
         """Initialize IndexFile object again @path."""
         if path.endswith('.index.sorted'):
             self.sorted = True
@@ -129,7 +230,7 @@ class IndexFile(object):
             self.sorted = False
         else:
             raise RuntimeError('{} is not index'.format(path))
-        self._file = open(path, 'rb' if readonly else 'ab')
+        self._file = open(path, mode)
 
     @staticmethod
     def create(path):
@@ -155,6 +256,11 @@ class IndexFile(object):
         """Size of the file."""
         return os.fstat(self._file.fileno()).st_size
 
+    def __getitem__(self, idx):
+        assert (idx + 1) * DiskControl.size <= self.size()
+        self._file.seek(idx * DiskControl.size)
+        return DiskControl(self._file.read(DiskControl.size))
+
     def __len__(self):
         """Return number of headers in index file."""
         return self.size() / DiskControl.size
@@ -174,11 +280,11 @@ class IndexFile(object):
 class DataFile(object):
     """Abstraction to data file."""
 
-    def __init__(self, path, readonly=True):
+    def __init__(self, path, mode='rb'):
         """Initialize DataFile object again @path."""
         self.sorted = os.path.exists(path + '.data_is_sorted') and \
             os.path.exists(path + '.index.sorted')
-        self._file = open(path, 'rb' if readonly else 'ab')
+        self._file = open(path, mode)
 
     @property
     def path(self):
@@ -190,9 +296,12 @@ class DataFile(object):
         """Return file."""
         return self._file
 
-    def read_header(self, offset):
+    def read_disk_control(self, position):
         """Read DiskControl at @offset."""
-        return DiskControl(self.read(offset, DiskControl.size))
+        return DiskControl(self.read(position, DiskControl.size))
+
+    def read_elliptics_header(self, position):
+        return EllipticsHeader(self.read(position + DiskControl.size, EllipticsHeader.size))
 
     def read(self, offset, size):
         """Read @size bytes from @offset."""
@@ -228,22 +337,22 @@ class DataFile(object):
 class Blob(object):
     """Abstraction to blob consisted from index and data files."""
 
-    def __init__(self, path, readonly=True):
+    def __init__(self, path, mode='rb'):
         """Initialize Blob object again @path."""
         if os.path.exists(path + '.index.sorted'):
-            self._index_file = IndexFile(path + '.index.sorted', readonly)
+            self._index_file = IndexFile(path + '.index.sorted', mode)
         elif os.path.exists(path + '.index'):
-            self._index_file = IndexFile(path + '.index', readonly)
+            self._index_file = IndexFile(path + '.index', mode)
         else:
             raise IOError('Could not find index for {}'.format(path))
-        self._data_file = DataFile(path, readonly)
+        self._data_file = DataFile(path, mode)
 
     @staticmethod
     def create(path):
         """Create new Blob at @path."""
         open(path + '.index', 'ab').close()
         open(path, 'ab').close()
-        return Blob(path, False)
+        return Blob(path, 'ab')
 
     @property
     def index(self):
@@ -254,6 +363,79 @@ class Blob(object):
     def data(self):
         """Return data file."""
         return self._data_file
+
+    def _murmur_chunk(self, chunk):
+        """Apply murmurhash to chunk and return raw result."""
+        chunk_size = 4096
+        result = 0
+        hasher = pyhash.murmur2_x64_64a()
+        while chunk:
+            result = hasher(chunk[:chunk_size], seed=result)
+            chunk = chunk[chunk_size:]
+        return struct.pack('<Q', result)
+
+    def murmur_record_data(self, header, chunk_size):
+        """Apply murmurhash to record's data pointed by @header."""
+        self.data.file.seek(header.position + DiskControl.size)
+
+        length = header.data_size
+        while length:
+            chunk_size = min(length, chunk_size)
+            yield self._murmur_chunk(self.data.file.read(chunk_size))
+            length -= chunk_size
+
+    def _verify_chunked_csum(self, header):
+        """Verify chunked checksum of the record pointer by @header."""
+        footer_size = 8
+
+        chunk_size = 1 << 20
+        chunks_count = ((header.disk_size - DiskControl.size - footer_size - 1) / (chunk_size + footer_size)) + 1
+        footer_offset = header.position + header.disk_size - (chunks_count + 1) * footer_size
+
+        calculated_csum = ''.join(self.murmur_record_data(header, chunk_size))
+
+        self.data.file.seek(footer_offset)
+        stored_csum = self.data.file.read(len(calculated_csum))
+        if calculated_csum != stored_csum:
+            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
+                stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
+            return False
+        return True
+
+    def _verify_sha15_csum(self, header):
+        """Verify sha512 checksum of the record pointer by @header."""
+        self.data.file.seek(header.position + DiskControl.size)
+
+        length = header.data_size
+        chunk = 32768
+        hasher = hashlib.sha512()
+        while length:
+            chunk = min(length, chunk)
+            hasher.update(self.data.file.read(chunk))
+            length -= chunk
+
+        calculated_csum = hasher.digest()
+
+        footer_size = 64 + 8
+
+        self.data.file.seek(header.position + header.disk_size - footer_size)
+        stored_csum = self.data.file.read(footer_size)[:64]
+
+        if calculated_csum != stored_csum:
+            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
+                stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
+            return False
+        return True
+
+    def verify_csum(self, header):
+        """Verify checksum of the record pointed by @header."""
+        if header.flags.nocsum:
+            return True
+
+        if header.flags.chunked_csum:
+            return self._verify_chunked_csum(header)
+        else:
+            return self._verify_sha15_csum(header)
 
 
 def sizeof_fmt(num, suffix='B'):
@@ -296,7 +478,7 @@ def get_checksum_size(header):
 
 def copy_record(src, dst, header):
     """Copy record from @src to @dst specified by @header."""
-    new_header = header.key + struct.pack('4Q', header.flags.flags, header.data_size,
+    new_header = header.key + struct.pack('<4Q', header.flags.flags, header.data_size,
                                           header.disk_size, dst.data.file.tell())
     dst.index.file.write(new_header)
     dst.data.file.write(new_header)
@@ -357,7 +539,7 @@ class BlobRepairer(object):
                 logging.error('malformed header has empty data_size but it is committed: %s', header)
                 return False
 
-            extension_header_size = ExtensionHeader.size if header.flags.exthdr else 0
+            extension_header_size = EllipticsHeader.size if header.flags.exthdr else 0
             checksum_size = get_checksum_size(header)
 
             if header.data_size + extension_header_size + checksum_size > header.disk_size:
@@ -377,7 +559,7 @@ class BlobRepairer(object):
 
         while position < end:
             try:
-                data_header = self.blob.data.read_header(position)
+                data_header = self.blob.data.read_disk_control(position)
             except EOFError as exc:
                 logging.error('Failed to read header from data: %s', exc)
                 break
@@ -430,7 +612,7 @@ class BlobRepairer(object):
             'Previous header should be placed exactly before position'
         assert previous_header.position <= header.position, 'Headers should be sorted by position'
 
-        data_header = self.blob.data.read_header(header.position)
+        data_header = self.blob.data.read_disk_control(header.position)
 
         if header != data_header:
             logging.error('Mispositioned record does not match header from data. Skip it: %s',
@@ -554,79 +736,6 @@ class BlobRepairer(object):
             print_error('{} does not match {}'.format(self.blob.index.path,
                                                       self.blob.data.path))
 
-    def verify_sha15(self, header):
-        """Verify sha512 checksum of the record pointer by @header."""
-        self.blob.data.file.seek(header.position + DiskControl.size)
-
-        length = header.data_size
-        chunk = 32768
-        hasher = hashlib.sha512()
-        while length:
-            chunk = min(length, chunk)
-            hasher.update(self.blob.data.file.read(chunk))
-            length -= chunk
-
-        calculated_csum = hasher.digest()
-
-        footer_size = 64 + 8
-
-        self.blob.data.file.seek(header.position + header.disk_size - footer_size)
-        stored_csum = self.blob.data.file.read(footer_size)[:64]
-
-        if calculated_csum != stored_csum:
-            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
-                stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
-            return False
-        return True
-
-    def murmur_chunk(self, chunk):
-        """Apply murmurhash to chunk and return raw result."""
-        chunk_size = 4096
-        result = 0
-        hasher = pyhash.murmur2_x64_64a()
-        while chunk:
-            result = hasher(chunk[:chunk_size], seed=result)
-            chunk = chunk[chunk_size:]
-        return struct.pack('Q', result)
-
-    def murmur_record_data(self, header, chunk_size):
-        """Apply murmurhash to record's data pointed by @header."""
-        self.blob.data.file.seek(header.position + DiskControl.size)
-
-        length = header.data_size
-        while length:
-            chunk_size = min(length, chunk_size)
-            yield self.murmur_chunk(self.blob.data.file.read(chunk_size))
-            length -= chunk_size
-
-    def verify_chunked(self, header):
-        """Verify chunked checksum of the record pointer by @header."""
-        footer_size = 8
-
-        chunk_size = 1 << 20
-        chunks_count = ((header.disk_size - DiskControl.size - footer_size - 1) / (chunk_size + footer_size)) + 1
-        footer_offset = header.position + header.disk_size - (chunks_count + 1) * footer_size
-
-        calculated_csum = ''.join(self.murmur_record_data(header, chunk_size))
-
-        self.blob.data.file.seek(footer_offset)
-        stored_csum = self.blob.data.file.read(len(calculated_csum))
-        if calculated_csum != stored_csum:
-            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
-                stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
-            return False
-        return True
-
-    def verify_csum(self, header):
-        """Verify checksum of the record pointed by @header."""
-        if header.flags.nocsum:
-            return True
-
-        if header.flags.chunked_csum:
-            return self.verify_chunked(header)
-        else:
-            return self.verify_sha15(header)
-
     def check(self, verify_csum, fast):
         """Check that both index and data files are correct."""
         self.check_index(fast=fast)
@@ -648,7 +757,7 @@ class BlobRepairer(object):
                     self.valid = False
                     self.check_hole(position, index_header.position)
 
-                data_header = self.blob.data.read_header(index_header.position)
+                data_header = self.blob.data.read_disk_control(index_header.position)
                 if index_header == data_header:
                     if index_header.flags.removed:
                         self.index_removed_headers += 1
@@ -658,7 +767,7 @@ class BlobRepairer(object):
                         self.index_uncommitted_headers_size += index_header.disk_size
                     else:
                         if verify_csum:
-                            if not self.verify_csum(index_header):
+                            if not self.blob.verify_csum(index_header):
                                 self.corrupted_data_headers += 1
                                 self.corrupted_data_headers_size += index_header.disk_size
                                 self.valid = False
@@ -797,9 +906,9 @@ def find_duplicates(blobs):
     for blob in blobs:
         index_file = None
         if os.path.exists(blob + '.index.sorted'):
-            index_file = IndexFile(blob + '.index.sorted', True)
+            index_file = IndexFile(blob + '.index.sorted')
         elif os.path.exists(blob + '.index'):
-            index_file = IndexFile(blob + '.index', True)
+            index_file = IndexFile(blob + '.index')
         else:
             raise IOError('Could not find index for {}'.format(blob))
 
@@ -813,7 +922,7 @@ def find_duplicates(blobs):
                 if header.flags.removed:
                     continue
 
-                info = index_file.path, header_idx
+                info = blob, header_idx
 
                 if header.key in duplicates:
                     duplicates[header.key] += [info]
@@ -825,8 +934,8 @@ def find_duplicates(blobs):
 
             pbar.update(stat_chunk)
 
-    for key in duplicates:
-        logging.error('Found key: %s in blobs: %s', key.encode('hex'), set([path for path, _ in duplicates[key]]))
+    # for key in duplicates:
+    #     logging.error('Found key: %s in blobs: %s', key.encode('hex'), set([path for path, _ in duplicates[key]]))
 
     report = 'I have found {} keys which have {} duplicates'.format(
         len(duplicates),
@@ -838,7 +947,73 @@ def find_duplicates(blobs):
     else:
         click.secho(report, bold=True)
 
-    return duplicates.itervalues()
+    return duplicates
+
+
+def remove_duplicates(blobs):
+    """Find and remove keys' duplicates."""
+    duplicates = sorted((sorted(value), key) for key, value in find_duplicates(blobs).iteritems())
+
+    stat_chunk = 1 << 10
+    with click.progressbar(length=len(duplicates), label='Removing duplicates') as pbar:
+        blobs_files = {}
+        removed_duplicates = 0
+        for idx, (key_duplicates, key) in enumerate(duplicates):
+            if (idx + 1) % stat_chunk == 0:
+                pbar.update(stat_chunk)
+
+            valid_duplicates = []
+            invalid_duplicates = []
+            for blob_path, header_idx in key_duplicates:
+                if blob_path not in blobs_files:
+                    blobs_files[blob_path] = Blob(blob_path, mode='r+b')
+
+                record = Record(blob=blobs_files[blob_path], index_idx=header_idx)
+
+                if record.data_disk_control != record.index_disk_control:
+                    # skip records with headers mismatch
+                    logging.error('Key: %s has headers\' mismatch, skip it. Try to fix blob: %s',
+                                  key.encode('hex'), blob_path)
+                    continue
+
+                assert record.index_disk_control.key == key
+                assert not record.index_disk_control.flags.removed
+
+                if record.index_disk_control.flags.uncommitted:
+                    valid_duplicates.append(record)
+                    continue
+
+                if record.verify_checksum():
+                    logging.error('Key: %s has filed checksum verification, it will be removed', key.encode('hex'))
+                    invalid_duplicates.append(record)
+                    continue
+
+                valid_duplicates.append(record)
+
+            records_to_remove = invalid_duplicates
+
+            if not valid_duplicates:
+                logging.error('Key: %s has no valid duplicates, so all (%s) of them will be removed',
+                              key.encode('hex'),
+                              len(invalid_duplicates))
+            else:
+                valid_duplicates.sort(
+                    key=lambda r: (r.elliptics_header.timestamp, not r.data_disk_control.flags.uncommitted),
+                    reverse=True)
+                logging.error('Key: %s has %s valid duplicates and %s invalid duplicates, '
+                              'all of them except one will be removed',
+                              key.encode('hex'), len(valid_duplicates), len(invalid_duplicates))
+                records_to_remove += valid_duplicates[1:]
+
+            if records_to_remove:
+                logging.error('I am about to remove %s duplicates: %s', len(records_to_remove), records_to_remove)
+                for record in records_to_remove:
+                    record.mark_removed()
+                removed_duplicates += len(records_to_remove)
+
+        print_error('Duplicates removed: {}'.format(removed_duplicates))
+
+        pbar.update(stat_chunk)
 
 
 @click.group()
@@ -850,7 +1025,7 @@ def cli(ctx, log_file):
     if log_file is None:
         logging.basicConfig(format=LOG_FORMAT, level=logging.ERROR)
     else:
-        dir_name = os.path.dirname(log_file)
+        dir_name = os.path.dirname(os.path.abspath(log_file))
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         logging.basicConfig(filename=log_file, format=LOG_FORMAT, level=logging.INFO)
@@ -963,6 +1138,13 @@ def fix_command(ctx, path, destination, noprompt):
 def find_duplicates_command(ctx, path):
     duplicates = find_duplicates(files(path))
     ctx.exit(len(duplicates))
+
+
+@cli.command(name='remove_duplicates')
+@click.argument('path')
+@click.pass_context
+def remove_duplicates_command(ctx, path):
+    remove_duplicates(files(path))
 
 
 def main():
