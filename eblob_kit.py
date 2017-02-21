@@ -236,7 +236,7 @@ class IndexFile(object):
     def create(path):
         """Create IndexFile for @path."""
         open(path, 'ab').close()
-        return IndexFile(path, False)
+        return IndexFile(path, mode='ab')
 
     @property
     def path(self):
