@@ -808,7 +808,7 @@ class BlobRepairer(object):
                     print_error('I have found broken header at offset {}: {}'
                                 .format(offset, header))
                     print_error('This record can not be skipped, so I break the recovering. '
-                                'You can use {} as an index for {} but id does not include '
+                                'You can use {} as an index for {} but it does not include '
                                 'records after {} offset'.format(index.path, data.path,
                                                                  offset))
                     break
