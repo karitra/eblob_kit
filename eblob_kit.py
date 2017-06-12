@@ -3,6 +3,7 @@
 
 """Toolkit for working with eblob blobs."""
 
+import errno
 import click
 import glob
 import hashlib
@@ -1140,8 +1141,12 @@ def fix_command(ctx, path, destination, noprompt):
 @click.argument('path')
 @click.pass_context
 def find_duplicates_command(ctx, path):
-    duplicates = find_duplicates(files(path))
-    ctx.exit(len(duplicates))
+    try:
+        duplicates = find_duplicates(files(path))
+        ctx.exit(1 if len(duplicates) != 0 else 0)
+    except:
+        logging.exception('Failed to find duplicates')
+        ctx.exit(errno.EIO)
 
 
 @cli.command(name='remove_duplicates')
