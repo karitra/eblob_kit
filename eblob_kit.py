@@ -58,7 +58,11 @@ class Record(object):
         return self._elliptics_header
 
     def verify_checksum(self):
-        """Verify record's checksum."""
+        """Verify record's checksum.
+
+        Returns:
+            bool: whether checksum verification succeeded or not.
+        """
         self._blob.verify_csum(self.data_disk_control)
 
     def mark_removed(self):
@@ -983,8 +987,8 @@ def remove_duplicates(blobs):
                     valid_duplicates.append(record)
                     continue
 
-                if record.verify_checksum():
-                    logging.error('Key: %s has filed checksum verification, it will be removed', key.encode('hex'))
+                if not record.verify_checksum():
+                    logging.error('Key: %s has failed checksum verification, it will be removed', key.encode('hex'))
                     invalid_duplicates.append(record)
                     continue
 
