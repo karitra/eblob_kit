@@ -1,3 +1,11 @@
+eblob-kit (0.0.16) unstable; urgency=medium
+
+  * fix find_duplicates exit code
+  * fix incorrect use of checksum verification result.
+  * fix typo
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Mon, 12 Jun 2017 13:02:36 +0300
+
 eblob-kit (0.0.15) unstable; urgency=medium
 
   * fix using inproper argument with IndexFile()
