@@ -1,3 +1,9 @@
+eblob-kit (0.0.17) unstable; urgency=medium
+
+  * do not catch SystemExit
+
+ -- Kirill Smorodinnikov <shaitkir@gmail.com>  Mon, 03 Jul 2017 13:50:01 +0300
+
 eblob-kit (0.0.16) unstable; urgency=medium
 
   * fix find_duplicates exit code
