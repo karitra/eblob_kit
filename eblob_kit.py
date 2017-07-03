@@ -1144,7 +1144,7 @@ def find_duplicates_command(ctx, path):
     try:
         duplicates = find_duplicates(files(path))
         ctx.exit(1 if len(duplicates) != 0 else 0)
-    except:
+    except Exception:
         logging.exception('Failed to find duplicates')
         ctx.exit(errno.EIO)
 
