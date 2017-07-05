@@ -95,6 +95,51 @@ class Record(object):
         assert index_disk_control == data_disk_control
         assert index_disk_control.flags.removed and data_disk_control.flags.removed
 
+    def restore(self):
+        logging.warning('Restoring key: %s, in blob: %s, with data-offset: %s, index-offset: %s,',
+                        self.data_disk_control.key.encode('hex'),
+                        self._blob.data.path,
+                        self.data_disk_control.position,
+                        self._index_idx * DiskControl.size)
+        assert self.data_disk_control.flags.removed and self.index_disk_control.flags.removed
+
+        record_flags = RecordFlags.EXTHDR
+        if self._blob.verify_chunked_csum(self.data_disk_control):
+            record_flags |= RecordFlags.CHUNKED_CSUM
+        elif self._blob.verify_sha15_csum(self.data_disk_control):
+            pass
+        else:
+            # TODO(shaitan): We could set RecordFlags.NOCSUM for such record but
+            # it can be an error to assume that there is no checksum if we can't determine
+            # the checksum type. This record can be corrupted or have new type of checksum which isn't supported yet by
+            # eblob_kit.
+            logging.error('Can not determine checksum type, key %s can not be restored',
+                          self.data_disk_control.key.encode('hex'))
+            return False
+
+        restored_flags = struct.pack('<Q', record_flags)
+        flags_offset = DiskControl.key_size
+
+        logging.warning('Updating index: %s, offset: %s, flags: %s', self._blob.index.path,
+                        (self._index_idx * DiskControl.size) + flags_offset, RecordFlags(record_flags))
+
+        self._blob.index.file.seek((self._index_idx * DiskControl.size) + flags_offset)
+        self._blob.index.file.write(restored_flags)
+
+        logging.warning('Updating data: %s, offset: %s, flags: %s', self._blob.data.path,
+                        self.data_disk_control.position + flags_offset, RecordFlags(record_flags))
+
+        self._blob.data.file.seek(self.data_disk_control.position + flags_offset)
+        self._blob.data.file.write(restored_flags)
+
+        index_disk_control = self._blob.index[self._index_idx]
+        data_disk_control = self._blob.data.read_disk_control(self.index_disk_control.position)
+
+        assert index_disk_control == data_disk_control
+        assert not index_disk_control.flags.removed and not data_disk_control.flags.removed
+        assert index_disk_control.flags.exthdr and data_disk_control.flags.exthdr
+        assert index_disk_control.flags.chunked_csum and data_disk_control.flags.chunked_csum
+        return True
 
 class EllipticsHeader(object):
     """Elliptics extension header."""
@@ -389,7 +434,7 @@ class Blob(object):
             yield self._murmur_chunk(self.data.file.read(chunk_size))
             length -= chunk_size
 
-    def _verify_chunked_csum(self, header):
+    def verify_chunked_csum(self, header):
         """Verify chunked checksum of the record pointer by @header."""
         footer_size = 8
 
@@ -407,7 +452,7 @@ class Blob(object):
             return False
         return True
 
-    def _verify_sha15_csum(self, header):
+    def verify_sha15_csum(self, header):
         """Verify sha512 checksum of the record pointer by @header."""
         self.data.file.seek(header.position + DiskControl.size)
 
@@ -438,9 +483,9 @@ class Blob(object):
             return True
 
         if header.flags.chunked_csum:
-            return self._verify_chunked_csum(header)
+            return self.verify_chunked_csum(header)
         else:
-            return self._verify_sha15_csum(header)
+            return self.verify_sha15_csum(header)
 
 
 def sizeof_fmt(num, suffix='B'):
@@ -502,6 +547,10 @@ def files(path):
     blob_re = re.compile(path + '-0.[0-9]+$')
     return (filename for filename in glob.iglob(path + '-0.*')
             if blob_re.match(filename))
+
+def read_keys(keys_path):
+    with open(keys_path, 'r') as keys_file:
+        return [line[:-1] for line in keys_file if len(line) == 129]  # 129 is 128 bytes of key + '\n'
 
 
 class BlobRepairer(object):
@@ -1021,6 +1070,68 @@ def remove_duplicates(blobs):
         pbar.update(stat_chunk)
 
 
+def restore_record(blob_path, index_idx):
+    record = Record(blob=Blob(blob_path, mode='r+b'), index_idx=index_idx)
+    return record.restore()
+
+
+def restore_keys(blobs, keys):
+    # dict to store all available records for each key
+    keys = {key: [] for key in keys}
+
+    if not keys:
+        logging.warning('No key should be restored')
+        return True
+
+    for blob_path in blobs:
+        blob_idx = int(blob_path[blob_path.find('.') + 1:])
+        if os.path.exists(blob_path + '.index.sorted'):
+            index_file = IndexFile(blob_path + '.index.sorted')
+        elif os.path.exists(blob_path + '.index'):
+            index_file = IndexFile(blob_path + '.index')
+        else:
+            raise IOError('Could not find index for {}'.format(blob_path))
+
+        stat_chunk = 1 << 10
+        with click.progressbar(length=len(index_file), label='Iterating: {}'.format(index_file.path)) as pbar:
+            for header_idx, header in enumerate(index_file, start=1):
+                if header_idx % stat_chunk == 0:
+                    pbar.update(stat_chunk)
+
+                if header.key.encode('hex') not in keys:
+                    continue
+
+                if not header.flags.removed:
+                    logging.warning('Found alive record for key: %s, in blob: %s', header, blob_path)
+                    del keys[header.key.encode('hex')]
+                    continue
+
+                keys[header.key.encode('hex')].append(((blob_idx, header.position), (blob_path, header_idx - 1)))
+            pbar.update(stat_chunk)
+
+    if not keys:
+        logging.warning('No key should be restored')
+        return True
+
+    result = True
+    with click.progressbar(length=len(keys), label='Restoring') as pbar:
+        for key_idx, (key, records) in enumerate(keys.iteritems(), start=1):
+            if key_idx % stat_chunk == 0:
+                pbar.update(stat_chunk)
+
+            if len(records) == 0:
+                logging.error('I have not found key: %s, so it can not be restored', key)
+                continue
+
+            _, (blob_path, index_idx) = records[0]
+            if len(records) > 1:
+                _, (blob_path, index_idx) = sorted(records)[-1]
+
+            result &= restore_record(blob_path, index_idx)
+        pbar.update(stat_chunk)
+    return result
+
+
 @click.group()
 @click.version_option()
 @click.pass_context
@@ -1154,6 +1265,14 @@ def find_duplicates_command(ctx, path):
 @click.pass_context
 def remove_duplicates_command(ctx, path):
     remove_duplicates(files(path))
+
+
+@cli.command(name='restore_keys')
+@click.argument('path')
+@click.option('-k', '--keys', 'keys_path', prompt='Where should I found keys to resotre',
+              help='k for keys to restore')
+def restore_keys_command(ctx, path, keys_path):
+    ctx.exit(not restore_keys(files(path), read_keys(keys_path)))
 
 
 def main():
