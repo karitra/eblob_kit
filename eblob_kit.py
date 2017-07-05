@@ -1271,6 +1271,7 @@ def remove_duplicates_command(ctx, path):
 @click.argument('path')
 @click.option('-k', '--keys', 'keys_path', prompt='Where should I found keys to resotre',
               help='k for keys to restore')
+@click.pass_context
 def restore_keys_command(ctx, path, keys_path):
     ctx.exit(not restore_keys(files(path), read_keys(keys_path)))
 
