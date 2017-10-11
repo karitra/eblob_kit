@@ -552,7 +552,7 @@ def read_keys(keys_path, short):
     with open(keys_path, 'r') as keys_file:
         # 27 is 12 bytes + '...' + 12 bytes + '\n' -  'f1ddefc58a5d...89b550cc034c\n'
         # 129 is 128 bytes of key + '\n'
-        return [line[:-1] for line in keys_file if len(line) == (27 if short else 129)]
+        return [line[:-1] for line in keys_file if len(line) == (28 if short else 129)]
 
 
 class BlobRepairer(object):
