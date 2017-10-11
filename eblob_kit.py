@@ -548,9 +548,11 @@ def files(path):
     return (filename for filename in glob.iglob(path + '-0.*')
             if blob_re.match(filename))
 
-def read_keys(keys_path):
+def read_keys(keys_path, short):
     with open(keys_path, 'r') as keys_file:
-        return [line[:-1] for line in keys_file if len(line) == 129]  # 129 is 128 bytes of key + '\n'
+        # 27 is 12 bytes + '...' + 12 bytes + '\n' -  'f1ddefc58a5d...89b550cc034c\n'
+        # 129 is 128 bytes of key + '\n'
+        return [line[:-1] for line in keys_file if len(line) == (27 if short else 129)]
 
 
 class BlobRepairer(object):
@@ -1075,7 +1077,7 @@ def restore_record(blob_path, index_idx):
     return record.restore()
 
 
-def restore_keys(blobs, keys):
+def restore_keys(blobs, keys, short):
     # dict to store all available records for each key
     keys = {key: [] for key in keys}
 
@@ -1098,7 +1100,11 @@ def restore_keys(blobs, keys):
                 if header_idx % stat_chunk == 0:
                     pbar.update(stat_chunk)
 
-                if header.key.encode('hex') not in keys:
+                key = header.key.encode('hex')
+                if short:
+                    key = '{}...{}'.format(key[:12], key[-12:])
+
+                if key not in keys:
                     continue
 
                 if not header.flags.removed:
@@ -1106,7 +1112,7 @@ def restore_keys(blobs, keys):
                     del keys[header.key.encode('hex')]
                     continue
 
-                keys[header.key.encode('hex')].append(((blob_idx, header.position), (blob_path, header_idx - 1)))
+                keys[key].append(((blob_idx, header.position), (blob_path, header_idx - 1)))
             pbar.update(stat_chunk)
 
     if not keys:
@@ -1271,9 +1277,10 @@ def remove_duplicates_command(ctx, path):
 @click.argument('path')
 @click.option('-k', '--keys', 'keys_path', prompt='Where should I found keys to resotre',
               help='k for keys to restore')
+@click.option('--short', is_flag=True)
 @click.pass_context
-def restore_keys_command(ctx, path, keys_path):
-    ctx.exit(not restore_keys(files(path), read_keys(keys_path)))
+def restore_keys_command(ctx, path, keys_path, short):
+    ctx.exit(not restore_keys(files(path), read_keys(keys_path, short), short=short))
 
 
 def main():
