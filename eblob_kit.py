@@ -1109,7 +1109,7 @@ def restore_keys(blobs, keys, short):
 
                 if not header.flags.removed:
                     logging.warning('Found alive record for key: %s, in blob: %s', header, blob_path)
-                    del keys[header.key.encode('hex')]
+                    del keys[key]
                     continue
 
                 keys[key].append(((blob_idx, header.position), (blob_path, header_idx - 1)))
