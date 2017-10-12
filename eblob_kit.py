@@ -20,6 +20,11 @@ import pyhash
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s: %(message)s'
 
 
+class ChecksumTypes(object):
+    SHA512 = 'sha512'
+    CHUNKED = 'chunked'
+
+
 class Record(object):
     """Represent record stored in blob."""
     def __init__(self, blob, index_idx=None, index_disk_control=None, data_disk_control=None):
@@ -95,7 +100,7 @@ class Record(object):
         assert index_disk_control == data_disk_control
         assert index_disk_control.flags.removed and data_disk_control.flags.removed
 
-    def restore(self):
+    def restore(self, checksum_type):
         logging.warning('Restoring key: %s, in blob: %s, with data-offset: %s, index-offset: %s,',
                         self.data_disk_control.key.encode('hex'),
                         self._blob.data.path,
@@ -104,7 +109,12 @@ class Record(object):
         assert self.data_disk_control.flags.removed and self.index_disk_control.flags.removed
 
         record_flags = RecordFlags.EXTHDR
-        if self._blob.verify_chunked_csum(self.data_disk_control):
+
+        if checksum_type == ChecksumTypes.CHUNKED:
+            record_flags |= RecordFlags.CHUNKED_CSUM
+        elif checksum_type == ChecksumTypes.SHA512:
+            pass
+        elif self._blob.verify_chunked_csum(self.data_disk_control):
             record_flags |= RecordFlags.CHUNKED_CSUM
         elif self._blob.verify_sha15_csum(self.data_disk_control):
             pass
@@ -1072,12 +1082,12 @@ def remove_duplicates(blobs):
         pbar.update(stat_chunk)
 
 
-def restore_record(blob_path, index_idx):
+def restore_record(blob_path, index_idx, checksum_type):
     record = Record(blob=Blob(blob_path, mode='r+b'), index_idx=index_idx)
-    return record.restore()
+    return record.restore(checksum_type)
 
 
-def restore_keys(blobs, keys, short):
+def restore_keys(blobs, keys, short, checksum_type):
     # dict to store all available records for each key
     keys = {key: [] for key in keys}
 
@@ -1133,7 +1143,7 @@ def restore_keys(blobs, keys, short):
             if len(records) > 1:
                 _, (blob_path, index_idx) = sorted(records)[-1]
 
-            result &= restore_record(blob_path, index_idx)
+            result &= restore_record(blob_path, index_idx, checksum_type)
         pbar.update(stat_chunk)
     return result
 
@@ -1278,9 +1288,17 @@ def remove_duplicates_command(ctx, path):
 @click.option('-k', '--keys', 'keys_path', prompt='Where should I found keys to resotre',
               help='k for keys to restore')
 @click.option('--short', is_flag=True)
+@click.option('--checksum-type', type=click.Choice([ChecksumTypes.SHA512, ChecksumTypes.CHUNKED]), default=None,
+              help=('specify checksum-type to avoid checksum recognition. ATTENTION! IF YOU CHOOSE WRONG CHECKSUM TYPE,'
+                    ' RESTORED RECORDS WILL BE CONSIDERED AS CORRUPTED. SO, PLEASE, USE IT WITH CAUTION!'))
 @click.pass_context
-def restore_keys_command(ctx, path, keys_path, short):
-    ctx.exit(not restore_keys(files(path), read_keys(keys_path, short), short=short))
+def restore_keys_command(ctx, path, keys_path, short, checksum_type):
+    ctx.exit(
+        not restore_keys(blobs=files(path),
+                         keys=read_keys(keys_path, short),
+                         short=short,
+                         checksum_type=checksum_type)
+    )
 
 
 def main():
