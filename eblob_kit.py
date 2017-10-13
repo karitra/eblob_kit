@@ -1129,19 +1129,24 @@ def restore_keys(blobs, keys, short, checksum_type):
         logging.warning('No key should be restored')
         return True
 
+    keys_to_restore = []
+    for key, records in keys.iteritems():
+        if len(records) == 0:
+            logging.error('I have not found key: %s, so it can not be restored', key)
+            continue
+
+        (_, position), (blob_path, index_idx) = records[0]
+        if len(records) > 1:
+            (_, position), (blob_path, index_idx) = sorted(records)[-1]
+
+        keys_to_restore.append((blob_path, position, index_idx))
+    keys_to_restore.sort()
+
     result = True
     with click.progressbar(length=len(keys), label='Restoring') as pbar:
-        for key_idx, (key, records) in enumerate(keys.iteritems(), start=1):
+        for key_idx, (blob_path, _, index_idx) in enumerate(keys_to_restore, start=1):
             if key_idx % stat_chunk == 0:
                 pbar.update(stat_chunk)
-
-            if len(records) == 0:
-                logging.error('I have not found key: %s, so it can not be restored', key)
-                continue
-
-            _, (blob_path, index_idx) = records[0]
-            if len(records) > 1:
-                _, (blob_path, index_idx) = sorted(records)[-1]
 
             result &= restore_record(blob_path, index_idx, checksum_type)
         pbar.update(stat_chunk)
