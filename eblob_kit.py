@@ -106,7 +106,11 @@ class Record(object):
                         self._blob.data.path,
                         self.data_disk_control.position,
                         self._index_idx * DiskControl.size)
-        assert self.data_disk_control.flags.removed and self.index_disk_control.flags.removed
+        if not self.data_disk_control.flags.removed or not self.index_disk_control.flags.removed:
+            logging.error('Key: %s is not marked removed in blob: %s or index: %s',
+                          self.data_disk_control.key.encode('hex'),
+                          self.data_disk_control.flags.removed, self.index_disk_control.flags.removed)
+            return False
 
         record_flags = RecordFlags.EXTHDR
 
