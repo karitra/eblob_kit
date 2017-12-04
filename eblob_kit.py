@@ -182,6 +182,8 @@ class RecordFlags(object):
     EXTHDR = 1 << 6
     UNCOMMITTED = 1 << 7
     CHUNKED_CSUM = 1 << 8
+    CORRUPTED = 1 << 9
+
 
     _FLAGS = {
         REMOVED: 'removed',
@@ -189,6 +191,7 @@ class RecordFlags(object):
         EXTHDR: 'exthdr',
         UNCOMMITTED: 'uncommitted',
         CHUNKED_CSUM: 'chunked_csum',
+        CORRUPTED: 'corrupted',
     }
 
     def __init__(self, flags):
@@ -220,6 +223,10 @@ class RecordFlags(object):
     chunked_csum = property(lambda self: self.flags & self.CHUNKED_CSUM,
                             lambda self, value: self._set(self.CHUNKED_CSUM, value),
                             lambda self: self._set(self.CHUNKED_CSUM, False))
+
+    corrupted = property(lambda self: self.flags & self.CORRUPTED,
+                         lambda self, value: self._set(self.CORRUPTED, value),
+                         lambda self: self._set(self.CORRUPTED, False))
 
     def __str__(self):
         """Convert flags to human-readable view."""
