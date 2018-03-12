@@ -152,7 +152,7 @@ class Record(object):
         assert index_disk_control == data_disk_control
         assert not index_disk_control.flags.removed and not data_disk_control.flags.removed
         assert index_disk_control.flags.exthdr and data_disk_control.flags.exthdr
-        assert index_disk_control.flags.chunked_csum and data_disk_control.flags.chunked_csum
+        # assert index_disk_control.flags.chunked_csum and data_disk_control.flags.chunked_csum
         return True
 
 class EllipticsHeader(object):
