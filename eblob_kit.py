@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import sys
 import struct
 from datetime import datetime
 from datetime import timedelta
@@ -18,6 +19,48 @@ import click
 import pyhash
 
 LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s: %(message)s'
+
+
+class MutedProgressbar(object):
+    """Mute progressbar output when in MM minion mode.
+
+    TODO(karapuz): it seems, that with some additional tweaks it is possible to
+    add progressbar to Mastermaind Minion watcher, so minion progress would be
+    indicated in dashboard.
+    """
+    def __init__(self, iterator=None):
+        self._iterator = iterator
+
+    def __enter__(self):
+        class DummyProgressIterator(object):
+            def __init__(self, **kwargs):
+                self._iterator = kwargs.get('iterator')
+
+            def __iter__(self):
+                return self
+
+            def update(*_args):
+                pass
+
+            def next(self):
+                if self._iterator:
+                    return self._iterator.next()
+
+                raise StopIteration
+
+        return DummyProgressIterator(iterator=self._iterator)
+
+    def __exit__(_self, *_args):
+        pass
+
+
+def make_progressbar(is_minion_mode, length, label, iterator=None):
+    if is_minion_mode:
+        return MutedProgressbar(iterator)
+    elif iterator is None:
+        return click.progressbar(length=length, label=label)
+    else:
+        return click.progressbar(iterator, length=length, label=label)
 
 
 class ChecksumTypes(object):
@@ -279,7 +322,7 @@ class DiskControl(object):
     def __str__(self):
         """Make human-readable string."""
         return '{}: position: {:12} data_size: {} ({}) disk_size: {} ({}) flags: {}'.format(
-            self.key.encode('hex'), self.position,
+            self.key_as_string, self.position,
             self.data_size, sizeof_fmt(self.data_size),
             self.disk_size, sizeof_fmt(self.disk_size),
             self.flags)
@@ -288,6 +331,10 @@ class DiskControl(object):
         """Compare self with other."""
         return cmp((self.key, self.flags, self.data_size, self.disk_size, self.position),
                    (other.key, other.flags, other.data_size, other.disk_size, other.position))
+
+    @property
+    def key_as_string(self):
+        return self.key.encode('hex')
 
 
 class IndexFile(object):
@@ -408,7 +455,7 @@ class DataFile(object):
 class Blob(object):
     """Abstraction to blob consisted from index and data files."""
 
-    def __init__(self, path, mode='rb'):
+    def __init__(self, path, mode='rb', is_minion_mode=False):
         """Initialize Blob object again @path."""
         if os.path.exists(path + '.index.sorted'):
             self._index_file = IndexFile(path + '.index.sorted', mode)
@@ -416,7 +463,12 @@ class Blob(object):
             self._index_file = IndexFile(path + '.index', mode)
         else:
             raise IOError('Could not find index for {}'.format(path))
+
         self._data_file = DataFile(path, mode)
+        self._eprint = (
+            LoggerOnlyErrorPrinter() if is_minion_mode
+            else BaseErrorPrinter()
+        )
 
     @staticmethod
     def create(path):
@@ -468,7 +520,8 @@ class Blob(object):
         self.data.file.seek(footer_offset)
         stored_csum = self.data.file.read(len(calculated_csum))
         if calculated_csum != stored_csum:
-            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
+            self._eprint(
+                'Invalid csum, stored ({}) != calculated ({}): {}'.format(
                 stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
             return False
         return True
@@ -493,7 +546,7 @@ class Blob(object):
         stored_csum = self.data.file.read(footer_size)[:64]
 
         if calculated_csum != stored_csum:
-            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
+            self._eprint('Invalid csum, stored ({}) != calculated ({}): {}'.format(
                 stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
             return False
         return True
@@ -529,9 +582,22 @@ def header_range_fmt(header):
 
 
 def print_error(text):
-    """Print error text into console."""
+    """Print error text into console and log."""
     click.secho(text, bold=True, fg='red', err=True)
     logging.error(text)
+
+
+# TODO(karapuz): implement print_info conterparts?
+class BaseErrorPrinter(object):
+    """Adapter to basic print_error function."""
+    def __call__(self, error_text):
+        print_error(error_text)
+
+
+class LoggerOnlyErrorPrinter(object):
+    """Prints error only to log file."""
+    def __call__(self, error_text):
+        logging.error(error_text)
 
 
 def get_checksum_size(header):
@@ -569,6 +635,7 @@ def files(path):
     return (filename for filename in glob.iglob(path + '-0.*')
             if blob_re.match(filename))
 
+
 def read_keys(keys_path, short):
     with open(keys_path, 'r') as keys_file:
         # 28 is 12 bytes + '...' + 12 bytes + '\n' -  'f1ddefc58a5d...89b550cc034c\n'
@@ -579,24 +646,61 @@ def read_keys(keys_path, short):
 class BlobRepairer(object):
     """Check and repair blob."""
 
-    def __init__(self, path):
+    def __init__(self, path, is_minion_mode=False):
         """Initialize BlobRepairer for blob at @path."""
-        self.blob = Blob(path)
+        self.blob = Blob(path, is_minion_mode=is_minion_mode)
         self.valid = True
         self.index_order_error = False
         self.invalid_index_size = False
         self.index_malformed_headers = 0
+        self.index_malformed_headers_keys = set()
         self.index_headers = []
         self.corrupted_data_headers = 0
+        self.corrupted_data_headers_keys = set()
         self.corrupted_data_headers_size = 0
         self.index_removed_headers = 0
+        self.index_removed_headers_keys = set()
         self.index_removed_headers_size = 0
         self.index_uncommitted_headers = 0
+        self.index_uncommitted_headers_keys = set()
         self.index_uncommitted_headers_size = 0
         self.data_recoverable_headers = []
         self.mismatched_headers = []
         self.holes = 0
         self.holes_size = 0
+        self.is_minion_mode = is_minion_mode
+
+        self.eprint = (
+            LoggerOnlyErrorPrinter() if is_minion_mode
+            else BaseErrorPrinter()
+        )
+
+    @property
+    def artifacts(self):
+        """Compose MasterMind minion artifacts."""
+
+        return {
+            'index_order_error': self.index_order_error,
+            'invalid_index_size': self.invalid_index_size,
+
+            'index_malformed_headers': self.index_malformed_headers,
+            'index_malformed_headers_keys': list(self.index_malformed_headers_keys),
+
+            'corrupted_data_headers': self.corrupted_data_headers,
+            'corrupted_data_headers_keys': list(self.corrupted_data_headers_keys),
+
+            'index_removed_headers': self.index_removed_headers,
+            'index_removed_headers_keys': list(self.index_removed_headers_keys),
+
+            'index_uncommitted_headers': self.index_uncommitted_headers,
+            'index_uncommitted_headers_keys': list(self.index_uncommitted_headers_keys),
+
+            'data_recoverable_headers_keys': [
+                k.key_as_string for k in self.data_recoverable_headers
+            ],
+
+            'mismatched_headers': [d.key_as_string for _, d in self.mismatched_headers],
+        }
 
     def check_header(self, header):
         """Check header correctness."""
@@ -654,7 +758,7 @@ class BlobRepairer(object):
                               position, range_fmt(position, end), data_header)
                 break
             elif data_header.position + data_header.disk_size > end:
-                print_error('Header from data defines record as %s that is beyond the hole %s'
+                self.eprint('Header from data defines record as %s that is beyond the hole %s'
                             'Currently, I can not overcome this type of failure, '
                             'so I skip headers from data in {}'
                             .format(header_range_fmt(data_header),
@@ -675,19 +779,27 @@ class BlobRepairer(object):
             self.holes += 1
             self.holes_size += end - position
 
+
     def resolve_mispositioned_record(self, header_idx, position, valid_headers):
-        """
-        Try to resolve mispositioned record failure.
+        """Try to resolve mispositioned record failure.
 
         Return whether header at @header_idx should be skipped.
         """
         header = self.index_headers[header_idx]
 
-        assert header_idx > 0, 'Mispositioned record failure can not occur with first header'
+        # TODO(karapuz): errors instead of asserts?
+        assert \
+            header_idx > 0, \
+            'Mispositioned record failure can not occur with first header'
+
         previous_header = self.index_headers[header_idx - 1]
-        assert position == previous_header.position + previous_header.disk_size,\
+        assert \
+            position == previous_header.position + previous_header.disk_size, \
             'Previous header should be placed exactly before position'
-        assert previous_header.position <= header.position, 'Headers should be sorted by position'
+
+        assert \
+            previous_header.position <= header.position, \
+            'Headers should be sorted by position'
 
         data_header = self.blob.data.read_disk_control(header.position)
 
@@ -720,8 +832,11 @@ class BlobRepairer(object):
         prev_key = None
         try:
             stat_chunk = 1 << 15
-            with click.progressbar(length=len(self.blob.index),
-                                   label='Checking {}'.format(self.blob.index.path)) as pbar:
+            with make_progressbar(
+                self.is_minion_mode,
+                length=len(self.blob.index),
+                label='Checking {}'.format(self.blob.index.path)
+            ) as pbar:
                 for index, header in enumerate(self.blob.index, 1):
                     if fast and not self.valid:
                         # return if it is fast-check and there was an error
@@ -735,13 +850,14 @@ class BlobRepairer(object):
                                 self.index_order_error = True
                             prev_key = header.key
                     else:
+                        self.index_malformed_headers_keys.add(header.key_as_string)
                         self.index_malformed_headers += 1
                         self.valid = False
                     if index % stat_chunk == 0:
                         pbar.update(stat_chunk)
                 pbar.update(stat_chunk)
         except EOFError as exc:
-            print_error('{} has incorrect size ({}) which is not a multiple '
+            self.eprint('{} has incorrect size ({}) which is not a multiple '
                         'of DiskControl.size ({}). Last incomplete header ({}) will be ignored.'
                         .format(self.blob.index.path, self.blob.index.size(), DiskControl.size,
                                 self.blob.index.size() % DiskControl.size))
@@ -753,11 +869,11 @@ class BlobRepairer(object):
             return
 
         if self.index_order_error:
-            print_error('{} is supposed to be sorted, but it has disordered headers'.format(
+            self.eprint('{} is supposed to be sorted, but it has disordered headers'.format(
                 self.blob.index.path))
 
         if self.index_malformed_headers or self.invalid_index_size:
-            print_error('{} has {} malformed and {} valid headers'.format(
+            self.eprint('{} has {} malformed and {} valid headers'.format(
                 self.blob.index.path, self.index_malformed_headers, len(self.index_headers)))
         else:
             logging.info('All %d headers in %s are valid',
@@ -775,7 +891,10 @@ class BlobRepairer(object):
                 self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
             report += '\n\t{} uncommitted records ({})'.format(
                 self.index_uncommitted_headers, sizeof_fmt(self.index_uncommitted_headers_size))
-            click.secho(report, bold=True)
+            if self.is_minion_mode:
+                logging.info(report)
+            else:
+                click.secho(report, bold=True)
             return
 
         report = '{} has:'.format(self.blob.data.path)
@@ -805,12 +924,12 @@ class BlobRepairer(object):
         if self.corrupted_data_headers:
             report += '\n\t{} headers ({}) has corrupted data'.format(
                 self.corrupted_data_headers, sizeof_fmt(self.corrupted_data_headers_size))
-        print_error(report)
+        self.eprint(report)
 
         if (not self.index_headers and
                 not self.index_removed_headers and
                 not self.index_uncommitted_headers):
-            print_error('{} does not match {}'.format(self.blob.index.path,
+            self.eprint('{} does not match {}'.format(self.blob.index.path,
                                                       self.blob.data.path))
 
     def check(self, verify_csum, fast):
@@ -823,8 +942,12 @@ class BlobRepairer(object):
         valid_headers = []
 
         stat_chunk = 1 << 15
-        with click.progressbar(length=len(self.index_headers),
-                               label='Checking: {}'.format(self.blob.data.path)) as pbar:
+
+        with make_progressbar(
+            self.is_minion_mode,
+            length=len(self.index_headers),
+            label='Checking: {}'.format(self.blob.data.path)
+        ) as pbar:
             position = 0
             for header_idx, index_header in enumerate(self.index_headers):
                 if position > index_header.position:
@@ -838,14 +961,17 @@ class BlobRepairer(object):
                 if index_header == data_header:
                     if index_header.flags.removed:
                         self.index_removed_headers += 1
+                        self.index_removed_headers_keys.add(data_header.key_as_string)
                         self.index_removed_headers_size += index_header.disk_size
                     elif index_header.flags.uncommitted:
                         self.index_uncommitted_headers += 1
+                        self.index_uncommitted_headers_keys.add(data_header.key_as_string)
                         self.index_uncommitted_headers_size += index_header.disk_size
                     else:
                         if verify_csum:
                             if not self.blob.verify_csum(index_header):
                                 self.corrupted_data_headers += 1
+                                self.corrupted_data_headers_keys.add(data_header.key_as_string)
                                 self.corrupted_data_headers_size += index_header.disk_size
                                 self.valid = False
                             else:
@@ -876,15 +1002,17 @@ class BlobRepairer(object):
         index_path = os.path.join(destination, basename + '.index')
         index = IndexFile.create(index_path)
 
-        with click.progressbar(length=len(data),
-                               label='Recovering index {} -> {}'
-                               .format(data.path, index_path)) as pbar:
+        with make_progressbar(
+            self.is_minion_mode,
+            length=len(data),
+            label='Recovering index {} -> {}'.format(data.path, index_path)
+        ) as pbar:
             for header in data:
                 if not header:
                     offset = data.file.tell() - DiskControl.size
-                    print_error('I have found broken header at offset {}: {}'
+                    self.eprint('I have found broken header at offset {}: {}'
                                 .format(offset, header))
-                    print_error('This record can not be skipped, so I break the recovering. '
+                    self.eprint('This record can not be skipped, so I break the recovering. '
                                 'You can use {} as an index for {} but it does not include '
                                 'records after {} offset'.format(index.path, data.path,
                                                                  offset))
@@ -902,12 +1030,14 @@ class BlobRepairer(object):
         removed_records = 0
         skipped_records = 0
 
-        with click.progressbar(length=len(self.blob.data),
-                               label='Recovering blob {} -> {}'
-                               .format(self.blob.data.path, blob_path)) as pbar:
+        with make_progressbar(
+            self.is_minion_mode,
+            length=len(self.blob.data),
+            label='Recovering blob {} -> {}'.format(self.blob.data.path, blob_path)
+        ) as pbar:
             for header in self.blob.data:
                 if not header:
-                    print_error('I have faced with broken record which I can not skip.')
+                    self.eprint('I have faced with broken record which I can not skip.')
                 if not header:
                     skipped_records += 1
                 elif header.flags.removed:
@@ -916,8 +1046,12 @@ class BlobRepairer(object):
                     copy_record(self.blob, blob, header)
                     copied_records += 1
                 pbar.update(header.disk_size)
-        click.echo('I have copied {} records, skipped {} and removed {} records'
-                   .format(copied_records, skipped_records, removed_records))
+
+        logger.info(
+            'I have copied %s records, '
+            'skipped %s and removed %s records',
+            copied_records, skipped_records, removed_records
+        )
 
     def copy_valid_records(self, destination):
         """Recover blob by copying only valid records from blob."""
@@ -930,16 +1064,21 @@ class BlobRepairer(object):
 
         self.index_headers += self.data_recoverable_headers
 
-        with click.progressbar(iter(self.index_headers),
-                               length=len(self.index_headers),
-                               label='Recovering blob {} -> {}'
-                               .format(self.blob.data.path, blob_path)) as pbar:
+        with make_progressbar(
+            self.is_minion_mode,
+            iterator=iter(self.index_headers),
+            length=len(self.index_headers),
+            label='Recovering blob {} -> {}'
+            .format(self.blob.data.path, blob_path)
+        ) as pbar:
             for header in pbar:
                 copy_record(self.blob, blob, header)
                 copied_records += 1
                 copied_size += header.disk_size
-        click.echo('I have copied {} ({}) records {} -> {} '.format(
-            copied_records, sizeof_fmt(copied_size), self.blob.data.path, blob_path))
+
+        logging.info('I have copied {} ({}) records {} -> {} '.format(
+            copied_records, sizeof_fmt(copied_size), self.blob.data.path,
+            blob_path))
 
     def fix(self, destination, noprompt):
         """Check blob's data & index and try to fix them if they are broken."""
@@ -965,7 +1104,7 @@ class BlobRepairer(object):
                 self.recover_blob(destination)
         else:
             if not self.index_headers:
-                print_error('Nothing can be recovered from {}, so it should be removed'
+                self.eprint('Nothing can be recovered from {}, so it should be removed'
                             .format(self.blob.data.path))
                 filname = '{}.should_be_removed'.format(
                     os.path.join(destination, os.path.basename(self.blob.data.path)))
@@ -1256,12 +1395,23 @@ def fix_index_command(path, destination):
               help='d for destination')
 @click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
               help='Assume Yes to all queries and do not prompt')
-def fix_blob_command(path, destination, noprompt):
+@click.option('-m', '--mmm-mode', 'is_minion', is_flag=True, default=False,
+              help=("Run in mustermind minion mode: "
+                    "'noprompt' flags would be set explicitly, "
+                    "output is specially formatted JSON "
+                    "and progress counters"))
+def fix_blob_command(path, destination, noprompt, is_minion):
     """Fix one blob @PATH."""
+    if is_minion:
+        noprompt = True
+
     if not os.path.exists(destination):
         os.mkdir(destination)
 
-    BlobRepairer(path).fix(destination, noprompt)
+    blob_repairer = BlobRepairer(path, is_minion)
+    blob_repairer.fix(destination, noprompt)
+
+    return blob_repairer.artifacts
 
 
 @cli.command(name='fix')
@@ -1270,15 +1420,35 @@ def fix_blob_command(path, destination, noprompt):
               help='d for destination')
 @click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
               help='Assume Yes to all queries and do not prompt')
+@click.option('-m', '--mmm-mode', 'is_minion', is_flag=True, default=False,
+              help=("Run in MusterMind Minion mode: "
+                    "'noprompt' flags would be set explicitly, "
+                    "output is specially formatted JSON "
+                    "and progress counters"))
 @click.pass_context
-def fix_command(ctx, path, destination, noprompt):
+def fix_command(ctx, path, destination, noprompt, is_minion):
     """Fix blobs @PATH."""
+    if is_minion:
+        noprompt = True
+
+    err_print = LoggerOnlyErrorPrinter() if is_minion else BaseErrorPrinter()
+
+    artifacts = {}
     for blob in files(path):
         try:
-            ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt)
+            artifacts[blob] = ctx.invoke(
+                fix_blob_command,
+                path=blob,
+                destination=destination,
+                noprompt=noprompt,
+                is_minion=is_minion,
+            )
         except Exception as exc:
-            print_error('Failed to fix {}: {} '.format(blob, exc))
+            err_print('Failed to fix {}: {} '.format(blob, exc))
+            raise
 
+    if is_minion:
+        json.dump(artifacts, sys.stdout)
 
 @cli.command(name='find_duplicates')
 @click.argument('path')
