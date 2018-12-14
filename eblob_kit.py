@@ -11,13 +11,84 @@ import logging
 import os
 import re
 import struct
+import sys
+
 from datetime import datetime
 from datetime import timedelta
 
 import click
 import pyhash
 
-LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s: %(message)s'
+
+def dump_digest(verbosity, results_digest):
+    """Dump report to console as JSON.
+
+    TODO(karapuz): tests
+
+    :param int verbosity: verbosity level, dump JSON only if verbosity <= Verbosity.JSON
+    :param Dict results_digest: report of command execution.
+
+    """
+    if verbosity > Verbosity.JSON:
+        return
+
+    try:
+        json.dump({'files': results_digest}, sys.stdout)
+    except Exception as e:
+        logging.error('Failed to dump results to console: %s', e)
+
+
+def dump_to_file(file_name, results):
+    """Dump report to file as JSON.
+
+    TODO(karapuz): tests
+
+    :param str file_name: name of file to write report to.
+    :param Dict results: dictionary to dump as JSON.
+
+    """
+    if not file_name:
+        return
+
+    try:
+        with open(file_name, 'wb') as out:
+            json.dump({'files': results}, out)
+    except Exception as e:
+        logging.error('Failed to dump json report file %s: %s', file_name, e)
+
+
+class ReportType(object):
+    """Command result report types.
+
+    BASIC     - basic stat, e.g. counters, flags etc. Use for console digest report.
+    EXTENDED  - BASIC, plus extended report on touched keys (if available). Use for
+                report to file/database.
+
+    """
+
+    BASIC, EXTENDED = ('REPORT_TYPE_BASIC', 'REPORT_TYPE_EXTENDED')
+
+
+JSON_OUTPUT = 'JSON_OUTPUT'
+
+LOG_FORMAT = '%(asctime)s %(process)d %(levelname)s: %(message)s (at %(filename)s:%(lineno)s)'
+
+
+class Verbosity(object):
+    """Levels of utility output verbosity.
+
+    JSON - print json only digest report to stdout and extended to file if --json-out
+           option is set. Note that logging is directed to stderr by default.
+
+    If verbosity > JSON, then output via standard logger, no json format will be used.
+    Logger could be configured to output via file. Any level > JSON is implicit for now,
+    but 'enum' is open for appending of new verbosity levels.
+
+    JSON is default verbosity level.
+
+    """
+
+    JSON = 0
 
 
 class ChecksumTypes(object):
@@ -155,8 +226,14 @@ class Record(object):
         # assert index_disk_control.flags.chunked_csum and data_disk_control.flags.chunked_csum
         return True
 
+
 class EllipticsHeader(object):
-    """Elliptics extension header."""
+    """Elliptics extension header.
+
+    TODO(karapuz): construction from byte stream (static method).
+    TODO(karapuz): tests.
+
+    """
 
     size = 48
 
@@ -183,7 +260,6 @@ class RecordFlags(object):
     UNCOMMITTED = 1 << 7
     CHUNKED_CSUM = 1 << 8
     CORRUPTED = 1 << 9
-
 
     _FLAGS = {
         REMOVED: 'removed',
@@ -239,20 +315,43 @@ class RecordFlags(object):
 
 
 class DiskControl(object):
-    """Eblob record header."""
+    """Eblob record header.
+
+    TODO(karapuz): properties docs.
+
+    """
 
     size = 96
     key_size = 64
 
-    def __init__(self, data):
-        """Initialize from raw @data and @offset."""
+    def __init__(self, key, data_size, disk_size, flags, position):
+        """Construct DiskControl with provided values."""
+        self.key = key
+        self.data_size = data_size
+        self.disk_size = disk_size
+        self.flags = flags
+        self.position = position
+
+    @staticmethod
+    def from_raw(data):
+        """Initialize from raw @data."""
+
         assert len(data) == DiskControl.size
-        self.key = data[:self.key_size]
-        raw = struct.unpack('<4Q', data[self.key_size:])
-        self.flags = RecordFlags(raw[0])
-        self.data_size = raw[1]
-        self.disk_size = raw[2]
-        self.position = raw[3]
+
+        key = data[:DiskControl.key_size]
+        raw = struct.unpack('<4Q', data[DiskControl.key_size:])
+
+        flags = RecordFlags(raw[0])
+        data_size = raw[1]
+        disk_size = raw[2]
+        position = raw[3]
+
+        return DiskControl(key=key, data_size=data_size, disk_size=disk_size, flags=flags, position=position)
+
+    @property
+    def hex_key(self):
+        """Stringify key as hex sequence."""
+        return self.key.encode('hex')
 
     @property
     def raw_data(self):
@@ -279,7 +378,7 @@ class DiskControl(object):
     def __str__(self):
         """Make human-readable string."""
         return '{}: position: {:12} data_size: {} ({}) disk_size: {} ({}) flags: {}'.format(
-            self.key.encode('hex'), self.position,
+            self.hex_key, self.position,
             self.data_size, sizeof_fmt(self.data_size),
             self.disk_size, sizeof_fmt(self.disk_size),
             self.flags)
@@ -330,7 +429,7 @@ class IndexFile(object):
     def __getitem__(self, idx):
         assert (idx + 1) * DiskControl.size <= self.size()
         self._file.seek(idx * DiskControl.size)
-        return DiskControl(self._file.read(DiskControl.size))
+        return DiskControl.from_raw(self._file.read(DiskControl.size))
 
     def __len__(self):
         """Return number of headers in index file."""
@@ -345,7 +444,7 @@ class IndexFile(object):
             if len(data) != DiskControl.size:
                 raise EOFError('Failed to read header at offset {} of {} ({})'
                                .format(offset, self.path, self.size()))
-            yield DiskControl(data)
+            yield DiskControl.from_raw(data)
 
 
 class DataFile(object):
@@ -369,9 +468,10 @@ class DataFile(object):
 
     def read_disk_control(self, position):
         """Read DiskControl at @offset."""
-        return DiskControl(self.read(position, DiskControl.size))
+        return DiskControl.from_raw(self.read(position, DiskControl.size))
 
     def read_elliptics_header(self, position):
+        """Read header at position."""
         return EllipticsHeader(self.read(position + DiskControl.size, EllipticsHeader.size))
 
     def read(self, offset, size):
@@ -396,7 +496,7 @@ class DataFile(object):
                 break
             if len(data) != DiskControl.size:
                 raise EOFError('Failed to read header at offset: {}'.format(offset))
-            header = DiskControl(data)
+            header = DiskControl.from_raw(data)
             yield header
             self._file.seek(offset + header.disk_size)
 
@@ -409,13 +509,14 @@ class Blob(object):
     """Abstraction to blob consisted from index and data files."""
 
     def __init__(self, path, mode='rb'):
-        """Initialize Blob object again @path."""
+        """Initialize Blob object against @path."""
         if os.path.exists(path + '.index.sorted'):
             self._index_file = IndexFile(path + '.index.sorted', mode)
         elif os.path.exists(path + '.index'):
             self._index_file = IndexFile(path + '.index', mode)
         else:
             raise IOError('Could not find index for {}'.format(path))
+
         self._data_file = DataFile(path, mode)
 
     @staticmethod
@@ -468,9 +569,12 @@ class Blob(object):
         self.data.file.seek(footer_offset)
         stored_csum = self.data.file.read(len(calculated_csum))
         if calculated_csum != stored_csum:
-            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
-                stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
+            logging.error('Invalid csum, stored (%s) != calculated (%s): %s',
+                          stored_csum.encode('hex'),
+                          calculated_csum.encode('hex'),
+                          header)
             return False
+
         return True
 
     def verify_sha15_csum(self, header):
@@ -493,9 +597,12 @@ class Blob(object):
         stored_csum = self.data.file.read(footer_size)[:64]
 
         if calculated_csum != stored_csum:
-            print_error('Invalid csum, stored ({}) != calculated ({}): {}'.format(
-                stored_csum.encode('hex'), calculated_csum.encode('hex'), header))
+            logging.error('Invalid csum, stored (%s) != calculated (%s): %s',
+                          stored_csum.encode('hex'),
+                          calculated_csum.encode('hex'),
+                          header)
             return False
+
         return True
 
     def verify_csum(self, header):
@@ -526,12 +633,6 @@ def range_fmt(start, end):
 def header_range_fmt(header):
     """Format header as [{start}, {end}] ({size})."""
     return range_fmt(header.position, header.position + header.disk_size)
-
-
-def print_error(text):
-    """Print error text into console."""
-    click.secho(text, bold=True, fg='red', err=True)
-    logging.error(text)
 
 
 def get_checksum_size(header):
@@ -569,6 +670,7 @@ def files(path):
     return (filename for filename in glob.iglob(path + '-0.*')
             if blob_re.match(filename))
 
+
 def read_keys(keys_path, short):
     with open(keys_path, 'r') as keys_file:
         # 28 is 12 bytes + '...' + 12 bytes + '\n' -  'f1ddefc58a5d...89b550cc034c\n'
@@ -576,27 +678,100 @@ def read_keys(keys_path, short):
         return [line[:-1] for line in keys_file if len(line) == (28 if short else 129)]
 
 
+class BlobRepairerStat(object):
+    """Blob repair process stat.
+
+    TODO(karapuz): tests
+    """
+
+    def __init__(self):
+        """Construct BlobRepairerStat with zeroed stat."""
+        self.index_order_error = False
+        self.invalid_index_size = False
+
+        self.index_malformed_headers = 0
+        self.index_malformed_headers_keys = set()
+
+        self.corrupted_data_headers = 0
+        self.corrupted_data_headers_keys = set()
+        self.corrupted_data_headers_size = 0
+
+        self.index_removed_headers = 0
+        self.index_removed_headers_keys = set()
+        self.index_removed_headers_size = 0
+
+        self.index_uncommitted_headers = 0
+        self.index_uncommitted_headers_keys = set()
+        self.index_uncommitted_headers_size = 0
+
+        self.data_recoverable_headers = []
+        self.mismatched_headers = []
+        self.holes = 0
+        self.holes_size = 0
+
+    @property
+    def as_dict(self):
+        """Compose stat report as dict.
+
+        :rtype: Dict[str, (numeric | List)]
+        """
+        result = self.as_digest_dict
+        result.update({
+            'index_malformed_headers_keys':
+                list(self.index_malformed_headers_keys),
+            'corrupted_data_headers_keys':
+                list(self.corrupted_data_headers_keys),
+            'index_removed_headers_keys':
+                list(self.index_removed_headers_keys),
+            'index_uncommitted_headers_keys':
+                list(self.index_uncommitted_headers_keys),
+            'data_recoverable_headers_keys': [
+                k.hex_key for k in self.data_recoverable_headers],
+
+            # TODO(karapuz): put here hashes from both index and data.
+            'mismatched_headers': [
+                d.hex_key for _, d in self.mismatched_headers],
+        })
+
+        return result
+
+    @property
+    def as_digest_dict(self):
+        """Compose repair report digest."""
+        return {
+            'index_order_error': self.index_order_error,
+            'invalid_index_size': self.invalid_index_size,
+            'index_malformed_headers': self.index_malformed_headers,
+            'corrupted_data_headers': self.corrupted_data_headers,
+            'index_removed_headers': self.index_removed_headers,
+            'index_uncommitted_headers': self.index_uncommitted_headers,
+        }
+
+
 class BlobRepairer(object):
     """Check and repair blob."""
 
     def __init__(self, path):
         """Initialize BlobRepairer for blob at @path."""
-        self.blob = Blob(path)
-        self.valid = True
-        self.index_order_error = False
-        self.invalid_index_size = False
-        self.index_malformed_headers = 0
-        self.index_headers = []
-        self.corrupted_data_headers = 0
-        self.corrupted_data_headers_size = 0
-        self.index_removed_headers = 0
-        self.index_removed_headers_size = 0
-        self.index_uncommitted_headers = 0
-        self.index_uncommitted_headers_size = 0
-        self.data_recoverable_headers = []
-        self.mismatched_headers = []
-        self.holes = 0
-        self.holes_size = 0
+        self._blob = Blob(path)
+        self._valid = True
+
+        self._index_headers = []
+
+        self._stat = BlobRepairerStat()
+
+    @property
+    def stat(self):
+        """Return BlobRepairerStat object."""
+        return self._stat
+
+    @property
+    def valid(self):
+        """Return current repairer status.
+
+        True, if it wasn't any inconsistency found while processing blob.
+        """
+        return self._valid
 
     def check_header(self, header):
         """Check header correctness."""
@@ -604,11 +779,11 @@ class BlobRepairer(object):
             logging.error('malformed header has empty disk_size: %s', header)
             return False
 
-        if header.position + header.disk_size > len(self.blob.data):
+        if header.position + header.disk_size > len(self._blob.data):
             logging.error('malformed header has position (%d) + disk_size (%d) '
                           'is out of %s (%d): %s',
                           header.position, header.disk_size,
-                          self.blob.data.path, len(self.blob.data), header)
+                          self._blob.data.path, len(self._blob.data), header)
             return False
 
         if not header.flags.uncommitted and not header.flags.removed:
@@ -636,7 +811,7 @@ class BlobRepairer(object):
 
         while position < end:
             try:
-                data_header = self.blob.data.read_disk_control(position)
+                data_header = self._blob.data.read_disk_control(position)
             except EOFError as exc:
                 logging.error('Failed to read header from data: %s', exc)
                 break
@@ -654,42 +829,36 @@ class BlobRepairer(object):
                               position, range_fmt(position, end), data_header)
                 break
             elif data_header.position + data_header.disk_size > end:
-                print_error('Header from data defines record as %s that is beyond the hole %s'
-                            'Currently, I can not overcome this type of failure, '
-                            'so I skip headers from data in {}'
-                            .format(header_range_fmt(data_header),
-                                    range_fmt(position, end),
-                                    range_fmt(position, end)))
                 logging.error('Header (%s) is beyond the hole %s: %s',
-                              header_range_fmt(data_header), range_fmt(position, end),
+                              header_range_fmt(data_header),
+                              range_fmt(position, end),
                               data_header)
                 break
             else:
                 logging.info('I have found valid header at position %d in data and '
                              'will add it to headers list', position)
                 if not data_header.flags.removed and not data_header.flags.uncommitted:
-                    self.data_recoverable_headers.append(data_header)
+                    self._stat.data_recoverable_headers.append(data_header)
                 position += data_header.disk_size
 
         if position != end:
-            self.holes += 1
-            self.holes_size += end - position
+            self._stat.holes += 1
+            self._stat.holes_size += end - position
 
     def resolve_mispositioned_record(self, header_idx, position, valid_headers):
-        """
-        Try to resolve mispositioned record failure.
+        """Try to resolve mispositioned record failure.
 
         Return whether header at @header_idx should be skipped.
         """
-        header = self.index_headers[header_idx]
+        header = self._index_headers[header_idx]
 
         assert header_idx > 0, 'Mispositioned record failure can not occur with first header'
-        previous_header = self.index_headers[header_idx - 1]
+        previous_header = self._index_headers[header_idx - 1]
         assert position == previous_header.position + previous_header.disk_size,\
             'Previous header should be placed exactly before position'
         assert previous_header.position <= header.position, 'Headers should be sorted by position'
 
-        data_header = self.blob.data.read_disk_control(header.position)
+        data_header = self._blob.data.read_disk_control(header.position)
 
         if header != data_header:
             logging.error('Mispositioned record does not match header from data. Skip it: %s',
@@ -700,17 +869,18 @@ class BlobRepairer(object):
                           'previous conflicting record which was correct. '
                           'current: %s, previous: %s', header, previous_header)
             del valid_headers[-1]
-        elif self.mismatched_headers and self.mismatched_headers[-1][0] == previous_header:
+        elif self._stat.mismatched_headers and self._stat.mismatched_headers[-1][0] == previous_header:
             logging.error('Mispositioned record does match header from data, so I remove '
                           'previous conflicting record which was mismatched. '
                           'current: %s, previous: %s', header, previous_header)
-            del self.mismatched_headers[-1]
+            del self._stat.mismatched_headers[-1]
+
         return False
 
     def resolve_mismatch(self, index_header, data_header, valid_headers):
         """Try to resolve mismatch if it is detected."""
-        self.mismatched_headers.append((index_header, data_header))
-        self.valid = False
+        self._stat.mismatched_headers.append((index_header, data_header))
+        self._valid = False
 
         logging.error('Headers mismatches: data_header: %s, index_header: %s',
                       data_header, index_header)
@@ -719,155 +889,152 @@ class BlobRepairer(object):
         """Check that index file is correct."""
         prev_key = None
         try:
-            stat_chunk = 1 << 15
-            with click.progressbar(length=len(self.blob.index),
-                                   label='Checking {}'.format(self.blob.index.path)) as pbar:
-                for index, header in enumerate(self.blob.index, 1):
-                    if fast and not self.valid:
-                        # return if it is fast-check and there was an error
-                        return
-                    if self.check_header(header):
-                        self.index_headers.append(header)
-                        if prev_key and self.blob.index.sorted:
-                            if prev_key > header.key:
-                                self.valid = False
-                                self.blob.index.sorted = False
-                                self.index_order_error = True
-                            prev_key = header.key
-                    else:
-                        self.index_malformed_headers += 1
-                        self.valid = False
-                    if index % stat_chunk == 0:
-                        pbar.update(stat_chunk)
-                pbar.update(stat_chunk)
-        except EOFError as exc:
-            print_error('{} has incorrect size ({}) which is not a multiple '
-                        'of DiskControl.size ({}). Last incomplete header ({}) will be ignored.'
-                        .format(self.blob.index.path, self.blob.index.size(), DiskControl.size,
-                                self.blob.index.size() % DiskControl.size))
-            logging.error('Failed to read header: %s. Skip other headers in index', exc)
-            self.invalid_index_size = True
-            self.valid = False
+            logging.info('Checking index: %s', self._blob.index.path)
 
-        if fast and not self.valid:
+            for header in self._blob.index:
+                if fast and not self._valid:
+                    # return if it is fast-check and there was an error
+                    return
+                if self.check_header(header):
+                    self._index_headers.append(header)
+                    if prev_key and self._blob.index.sorted:
+                        if prev_key > header.key:
+                            self._valid = False
+                            self._blob.index.sorted = False
+                            self._stat.index_order_error = True
+                    prev_key = header.key
+                else:
+                    self._stat.index_malformed_headers_keys.add(header.hex_key)
+                    self._stat.index_malformed_headers += 1
+
+                    self._valid = False
+        except EOFError as exc:
+            logging.error('Failed to read header path %s, error %s. Skip other headers in index',
+                          self._blob.index.path,
+                          exc)
+
+            self._stat.invalid_index_size = True
+            self._valid = False
+
+        if fast and not self._valid:
             return
 
-        if self.index_order_error:
-            print_error('{} is supposed to be sorted, but it has disordered headers'.format(
-                self.blob.index.path))
+        if self._stat.index_order_error:
+            logging.error('%s is supposed to be sorted, but it has disordered headers', self._blob.index.path)
 
-        if self.index_malformed_headers or self.invalid_index_size:
-            print_error('{} has {} malformed and {} valid headers'.format(
-                self.blob.index.path, self.index_malformed_headers, len(self.index_headers)))
+        if self._stat.index_malformed_headers or self._stat.invalid_index_size:
+            logging.error('%s has %s malformed and %s valid headers',
+                          self._blob.index.path,
+                          self._stat.index_malformed_headers,
+                          len(self._index_headers))
         else:
             logging.info('All %d headers in %s are valid',
-                         len(self.index_headers), self.blob.index.path)
+                         len(self._index_headers),
+                         self._blob.index.path)
 
         if not fast:
-            self.index_headers = sorted(self.index_headers, key=lambda h: h.position)
+            self._index_headers = sorted(self._index_headers, key=lambda h: h.position)
 
     def print_check_report(self):
         """Print report after check."""
-        if self.valid:
-            report = '{} is valid and has:'.format(self.blob.data.path)
-            report += '\n\t{} valid records'.format(len(self.index_headers))
+        if self._valid:
+            report = '{} is valid and has:'.format(self._blob.data.path)
+            report += '\n\t{} valid records'.format(len(self._index_headers))
             report += '\n\t{} removed records ({})'.format(
-                self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
+                self._stat.index_removed_headers, sizeof_fmt(self._stat.index_removed_headers_size))
             report += '\n\t{} uncommitted records ({})'.format(
-                self.index_uncommitted_headers, sizeof_fmt(self.index_uncommitted_headers_size))
-            click.secho(report, bold=True)
+                self._stat.index_uncommitted_headers, sizeof_fmt(self._stat.index_uncommitted_headers_size))
+            logging.info(report)
             return
 
-        report = '{} has:'.format(self.blob.data.path)
+        report = '{} has:'.format(self._blob.data.path)
         report += '\n\t{} headers ({}) from index are valid'.format(
-            len(self.index_headers), sizeof_fmt(sum(h.disk_size for h in self.index_headers)))
-        if self.index_removed_headers:
+            len(self._index_headers), sizeof_fmt(sum(h.disk_size for h in self._index_headers)))
+        if self._stat.index_removed_headers:
             report += '\n\t{} headers ({}) from index are valid and marked as removed'.format(
-                self.index_removed_headers, sizeof_fmt(self.index_removed_headers_size))
-        if self.index_uncommitted_headers:
+                self._stat.index_removed_headers, sizeof_fmt(self._stat.index_removed_headers_size))
+        if self._stat.index_uncommitted_headers:
             report += '\n\t{} headers ({}) from index are valid and marked as uncommitted'.format(
-                self.index_uncommitted_headers, sizeof_fmt(self.index_uncommitted_headers_size))
+                self._stat.index_uncommitted_headers, sizeof_fmt(self._stat.index_uncommitted_headers_size))
 
-        if self.mismatched_headers:
+        if self._stat.mismatched_headers:
             report += '\n\t{} headers which are different in the blob and in the index'.format(
-                len(self.mismatched_headers))
+                len(self._stat.mismatched_headers))
 
-        if self.data_recoverable_headers:
+        if self._stat.data_recoverable_headers:
             report += '\n\t{} headers ({}) can be recovered from data'.format(
-                len(self.data_recoverable_headers),
-                sizeof_fmt(sum(h.disk_size for h in self.data_recoverable_headers)))
-        if self.holes:
+                len(self._stat.data_recoverable_headers),
+                sizeof_fmt(sum(h.disk_size for h in self._stat.data_recoverable_headers)))
+        if self._stat.holes:
             report += '\n\t{} holes ({}) in blob which are not marked'.format(
-                self.holes, sizeof_fmt(self.holes_size))
-        if self.index_order_error:
+                self._stat.holes, sizeof_fmt(self._stat.holes_size))
+        if self._stat.index_order_error:
             report += '\n\t{} is supposed to be sorted but it has disordered header'.format(
-                self.blob.index.path)
-        if self.corrupted_data_headers:
+                self._blob.index.path)
+        if self._stat.corrupted_data_headers:
             report += '\n\t{} headers ({}) has corrupted data'.format(
-                self.corrupted_data_headers, sizeof_fmt(self.corrupted_data_headers_size))
-        print_error(report)
+                self._stat.corrupted_data_headers, sizeof_fmt(self._stat.corrupted_data_headers_size))
 
-        if (not self.index_headers and
-                not self.index_removed_headers and
-                not self.index_uncommitted_headers):
-            print_error('{} does not match {}'.format(self.blob.index.path,
-                                                      self.blob.data.path))
+        logging.error(report)
+
+        if (not self._index_headers and
+                not self._stat.index_removed_headers and
+                not self._stat.index_uncommitted_headers):
+            logging.error('%s does not match %s', self._blob.index.path, self._blob.data.path)
 
     def check(self, verify_csum, fast):
         """Check that both index and data files are correct."""
         self.check_index(fast=fast)
 
         if fast:
-            return self.valid
+            return self._valid
 
         valid_headers = []
 
-        stat_chunk = 1 << 15
-        with click.progressbar(length=len(self.index_headers),
-                               label='Checking: {}'.format(self.blob.data.path)) as pbar:
-            position = 0
-            for header_idx, index_header in enumerate(self.index_headers):
-                if position > index_header.position:
-                    self.resolve_mispositioned_record(header_idx, position, valid_headers)
+        position = 0
+        logging.info('Checking: %s', self._blob.data.path)
 
-                if position < index_header.position:
-                    self.valid = False
-                    self.check_hole(position, index_header.position)
+        for header_idx, index_header in enumerate(self._index_headers):
+            if position > index_header.position:
+                self.resolve_mispositioned_record(header_idx, position, valid_headers)
 
-                data_header = self.blob.data.read_disk_control(index_header.position)
-                if index_header == data_header:
-                    if index_header.flags.removed:
-                        self.index_removed_headers += 1
-                        self.index_removed_headers_size += index_header.disk_size
-                    elif index_header.flags.uncommitted:
-                        self.index_uncommitted_headers += 1
-                        self.index_uncommitted_headers_size += index_header.disk_size
-                    else:
-                        if verify_csum:
-                            if not self.blob.verify_csum(index_header):
-                                self.corrupted_data_headers += 1
-                                self.corrupted_data_headers_size += index_header.disk_size
-                                self.valid = False
-                            else:
-                                valid_headers.append(index_header)
+            if position < index_header.position:
+                self._valid = False
+                self.check_hole(position, index_header.position)
+
+            data_header = self._blob.data.read_disk_control(index_header.position)
+            if index_header == data_header:
+                if index_header.flags.removed:
+                    self._stat.index_removed_headers += 1
+                    self._stat.index_removed_headers_keys.add(data_header.hex_key)
+                    self._stat.index_removed_headers_size += index_header.disk_size
+                elif index_header.flags.uncommitted:
+                    self._stat.index_uncommitted_headers += 1
+                    self._stat.index_uncommitted_headers_keys.add(data_header.hex_key)
+                    self._stat.index_uncommitted_headers_size += index_header.disk_size
+                else:
+                    if verify_csum:
+                        if not self._blob.verify_csum(index_header):
+                            self._stat.corrupted_data_headers += 1
+                            self._stat.corrupted_data_headers_keys.add(data_header.hex_key)
+                            self._stat.corrupted_data_headers_size += index_header.disk_size
+                            self._valid = False
                         else:
                             valid_headers.append(index_header)
-                else:
-                    self.resolve_mismatch(index_header, data_header, valid_headers)
-                position = index_header.position + index_header.disk_size
+                    else:
+                        valid_headers.append(index_header)
+            else:
+                self.resolve_mismatch(index_header, data_header, valid_headers)
 
-                if (header_idx + 1) % stat_chunk == 0:
-                    pbar.update(stat_chunk)
+            position = index_header.position + index_header.disk_size
 
-            pbar.update(stat_chunk)
+        if position < len(self._blob.data):
+            self._valid = False
+            self.check_hole(position, len(self._blob.data))
 
-            if position < len(self.blob.data):
-                self.valid = False
-                self.check_hole(position, len(self.blob.data))
+        self._index_headers = valid_headers
 
-        self.index_headers = valid_headers
-
-        return self.valid
+        return self._valid
 
     @staticmethod
     def recover_index(data, destination):
@@ -876,25 +1043,26 @@ class BlobRepairer(object):
         index_path = os.path.join(destination, basename + '.index')
         index = IndexFile.create(index_path)
 
-        with click.progressbar(length=len(data),
-                               label='Recovering index {} -> {}'
-                               .format(data.path, index_path)) as pbar:
-            for header in data:
-                if not header:
-                    offset = data.file.tell() - DiskControl.size
-                    print_error('I have found broken header at offset {}: {}'
-                                .format(offset, header))
-                    print_error('This record can not be skipped, so I break the recovering. '
-                                'You can use {} as an index for {} but it does not include '
-                                'records after {} offset'.format(index.path, data.path,
-                                                                 offset))
-                    break
+        logging.info('Recovering index %s -> %s', data.path, index_path)
+
+        for header in data:
+            if header:
                 index.append(header)
-                pbar.update(header.disk_size)
+                continue
+
+            offset = data.file.tell() - DiskControl.size
+            logging.error('I have found broken header at offset %s: %s', offset, header)
+            logging.error('This record can not be skipped, so I break the recovering. '
+                          'You can use %s as an index for %s but it does not include '
+                          'records after %s offset',
+                          index.path,
+                          data.path,
+                          offset)
+            break
 
     def recover_blob(self, destination):
         """Recover blob from data."""
-        basename = os.path.basename(self.blob.data.path)
+        basename = os.path.basename(self._blob.data.path)
         blob_path = os.path.join(destination, basename)
         blob = Blob.create(blob_path)
 
@@ -902,76 +1070,82 @@ class BlobRepairer(object):
         removed_records = 0
         skipped_records = 0
 
-        with click.progressbar(length=len(self.blob.data),
-                               label='Recovering blob {} -> {}'
-                               .format(self.blob.data.path, blob_path)) as pbar:
-            for header in self.blob.data:
-                if not header:
-                    print_error('I have faced with broken record which I can not skip.')
-                if not header:
-                    skipped_records += 1
-                elif header.flags.removed:
-                    removed_records += 1
-                else:
-                    copy_record(self.blob, blob, header)
-                    copied_records += 1
-                pbar.update(header.disk_size)
-        click.echo('I have copied {} records, skipped {} and removed {} records'
-                   .format(copied_records, skipped_records, removed_records))
+        logging.info('Recovering blob %s -> %s', self._blob.data.path, blob_path)
+
+        for header in self._blob.data:
+            if not header:
+                logging.error('I have faced with broken record which I can not skip.')
+            if not header:
+                skipped_records += 1
+            elif header.flags.removed:
+                removed_records += 1
+            else:
+                copy_record(self._blob, blob, header)
+                copied_records += 1
+
+        logging.info('I have copied %s records, skipped %s and removed %s records',
+                     copied_records,
+                     skipped_records,
+                     removed_records)
 
     def copy_valid_records(self, destination):
         """Recover blob by copying only valid records from blob."""
-        basename = os.path.basename(self.blob.data.path)
+        basename = os.path.basename(self._blob.data.path)
         blob_path = os.path.join(destination, basename)
         blob = Blob.create(blob_path)
 
         copied_records = 0
         copied_size = 0
 
-        self.index_headers += self.data_recoverable_headers
+        self._index_headers += self._stat.data_recoverable_headers
+        logging.info('Recovering blob %s -> %s', self._blob.data.path, blob_path)
 
-        with click.progressbar(iter(self.index_headers),
-                               length=len(self.index_headers),
-                               label='Recovering blob {} -> {}'
-                               .format(self.blob.data.path, blob_path)) as pbar:
-            for header in pbar:
-                copy_record(self.blob, blob, header)
-                copied_records += 1
-                copied_size += header.disk_size
-        click.echo('I have copied {} ({}) records {} -> {} '.format(
-            copied_records, sizeof_fmt(copied_size), self.blob.data.path, blob_path))
+        for header in self._index_headers:
+            copy_record(self._blob, blob, header)
+            copied_records += 1
+            copied_size += header.disk_size
+
+        logging.info('I have copied %s (%s) records %s -> %s ',
+                     copied_records,
+                     sizeof_fmt(copied_size),
+                     self._blob.data.path,
+                     blob_path)
 
     def fix(self, destination, noprompt):
-        """Check blob's data & index and try to fix them if they are broken."""
+        """Check blob's data & index and try to fix them if they are broken.
+
+        TODO(karapuz): remove all interactive user interaction.
+
+        """
         self.check(verify_csum=True, fast=False)
         self.print_check_report()
 
-        if self.valid:
+        if self._valid:
             return
 
-        if (not self.index_headers and
-                not self.index_removed_headers and
-                not self.index_uncommitted_headers):
+        if (not self._index_headers and
+                not self._stat.index_removed_headers and
+                not self._stat.index_uncommitted_headers):
+
             if noprompt:
                 self.recover_blob(destination)
             elif click.confirm('There is no valid header in {}. '
                                'Should I try to recover index from {}?'
-                               .format(self.blob.index.path, self.blob.data.path),
+                               .format(self._blob.index.path, self._blob.data.path),
                                default=True):
-                self.recover_index(self.blob.data, destination)
+                self.recover_index(self._blob.data, destination)
             elif click.confirm('Should I try to recover both index and data from {}?'
-                               .format(self.blob.data.path),
+                               .format(self._blob.data.path),
                                default=True):
                 self.recover_blob(destination)
         else:
-            if not self.index_headers:
-                print_error('Nothing can be recovered from {}, so it should be removed'
-                            .format(self.blob.data.path))
+            if not self._index_headers:
+                logging.error('Nothing can be recovered from %s, so it should be removed', self._blob.data.path)
                 filname = '{}.should_be_removed'.format(
-                    os.path.join(destination, os.path.basename(self.blob.data.path)))
+                    os.path.join(destination, os.path.basename(self._blob.data.path)))
                 with open(filname, 'wb'):
                     pass
-            elif noprompt or click.confirm('Should I repair {}?'.format(self.blob.data.path),
+            elif noprompt or click.confirm('Should I repair {}?'.format(self._blob.data.path),
                                            default=True):
                 self.copy_valid_records(destination)
 
@@ -1020,9 +1194,9 @@ def find_duplicates(blobs):
     )
 
     if duplicates:
-        print_error(report)
+        logging.error(report)
     else:
-        click.secho(report, bold=True)
+        logging.info(report)
 
     return duplicates
 
@@ -1088,7 +1262,7 @@ def remove_duplicates(blobs):
                     record.mark_removed()
                 removed_duplicates += len(records_to_remove)
 
-        print_error('Duplicates removed: {}'.format(removed_duplicates))
+        logging.error('Duplicates removed: %s', removed_duplicates)
 
         pbar.update(stat_chunk)
 
@@ -1167,16 +1341,48 @@ def restore_keys(blobs, keys, short, checksum_type):
 @click.group()
 @click.version_option()
 @click.pass_context
-@click.option('-l', '--log-file', default=None, help='File for logs')
-def cli(ctx, log_file):
-    """eblob_kit is the tool for diagnosing, recovering and listing blobs."""
+@click.option('-l', '--log-file', default=None, help='File for logs.')
+@click.option('-j', '--json-file', default=None, help='File for JSON report.')
+@click.option('-v', '--verbose',
+              count=True,
+              help='Specify verbosity level, accumulate to increase verbosity level')
+def cli(ctx, log_file, json_file, verbose):
+    """eblob_kit is the tool for diagnosing, recovering and listing blobs.
+
+    \b
+    Verbosity levels currently supported:
+      - no verbosity: ouput resulting json to stdout on task completion.
+      - set once: print log to stdout, possible along with log-file, that could be set with -l option.
+    """
+    level = logging.INFO if verbose else logging.ERROR
+
     if log_file is None:
-        logging.basicConfig(format=LOG_FORMAT, level=logging.ERROR)
+        # NOTE: defaults to stderr.
+        logging.basicConfig(format=LOG_FORMAT, level=level)
     else:
         dir_name = os.path.dirname(os.path.abspath(log_file))
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
-        logging.basicConfig(filename=log_file, format=LOG_FORMAT, level=logging.INFO)
+
+        root_logger = logging.getLogger()
+
+        log_formatter = logging.Formatter(fmt=LOG_FORMAT)
+
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(log_formatter)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(log_formatter)
+
+        root_logger.setLevel(level)
+
+        root_logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
+
+    if json_file:
+        ctx.obj[JSON_OUTPUT] = json_file
+
+    ctx.obj['VERBOSITY'] = verbose
 
 
 @cli.command(name='list_index')
@@ -1225,7 +1431,7 @@ def check_blob_command(ctx, path, verify_csum, fast):
         else:
             ctx.exit(not result)
     except IOError as exc:
-        print_error('I have failed to open {}: {}'.format(path, exc))
+        logging.error('I have failed to open %s: %s', path, exc)
 
 
 @cli.command(name='check')
@@ -1256,12 +1462,32 @@ def fix_index_command(path, destination):
               help='d for destination')
 @click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
               help='Assume Yes to all queries and do not prompt')
-def fix_blob_command(path, destination, noprompt):
-    """Fix one blob @PATH."""
+@click.pass_context
+def fix_blob_command(ctx, path, destination, noprompt):
+    """Fix one blob @PATH.
+
+    TODO(karapuz): get rid of noprompt and interactivity.
+
+    """
+    verbosity = ctx.obj.get('VERBOSITY', Verbosity.JSON)
+
+    if verbosity <= Verbosity.JSON:
+        noprompt = True
+
     if not os.path.exists(destination):
         os.mkdir(destination)
 
-    BlobRepairer(path).fix(destination, noprompt)
+    blob_repairer = BlobRepairer(path)
+    blob_repairer.fix(destination, noprompt)
+
+    # FIX_BLOB_STANDALONE - means that fix_blob_command not called from another subcommand.
+    # TODO(karapuz): refactor ctx fields into well defined constants.
+    if ctx.obj.get('FIX_BLOB_STANDALONE', True):
+        dump_digest(verbosity, blob_repairer.stat.as_digest_dict)
+        dump_to_file(ctx.obj.get(JSON_OUTPUT), blob_repairer.stat.as_dict)
+    else:  # run as child.
+        ctx.obj.setdefault(ReportType.EXTENDED, {})[path] = blob_repairer.stat.as_dict
+        ctx.obj.setdefault(ReportType.BASIC, {})[path] = blob_repairer.stat.as_digest_dict
 
 
 @cli.command(name='fix')
@@ -1269,16 +1495,30 @@ def fix_blob_command(path, destination, noprompt):
 @click.option('-d', '--destination', prompt='Where should I place results?',
               help='d for destination')
 @click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
-              help='Assume Yes to all queries and do not prompt')
+              help="Assume Yes to all queries and do not prompt, "
+              "will be switched on when verbosity option not set")
 @click.pass_context
 def fix_command(ctx, path, destination, noprompt):
     """Fix blobs @PATH."""
+    verbosity = ctx.obj.get('VERBOSITY', Verbosity.JSON)
+
+    if verbosity <= Verbosity.JSON:
+        noprompt = True
+
+    ctx.obj['FIX_BLOB_STANDALONE'] = False
+
     for blob in files(path):
         try:
             ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt)
         except Exception as exc:
-            print_error('Failed to fix {}: {} '.format(blob, exc))
+            logging.error('Failed to fix %s: %s', blob, exc)
 
+    results = ctx.obj.get(ReportType.EXTENDED, {})
+    results_digest = ctx.obj.get(ReportType.BASIC, {})
+
+    # Put basic stat to stdout.
+    dump_digest(verbosity, results_digest)
+    dump_to_file(ctx.obj.get(JSON_OUTPUT), results)
 
 @cli.command(name='find_duplicates')
 @click.argument('path')
