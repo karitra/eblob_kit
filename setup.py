@@ -8,6 +8,8 @@ setup(name='eblob_kit',
       author_email='shaitkir@gmail.com',
       py_modules=['eblob_kit'],
       install_requires=['Click', 'pyhash'],
+      setup_requires=['pytest-runner'],
+      tests_require=['pytest', 'pytest-mock'],
       entry_points='''
           [console_scripts]
           eblob_kit=eblob_kit:main
