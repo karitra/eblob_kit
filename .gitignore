@@ -64,3 +64,6 @@ target/
 # debian
 debian/files
 debian/eblob-kit*
+
+# pytest temporary files
+.pytest_cache/
