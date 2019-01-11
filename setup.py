@@ -8,7 +8,10 @@ setup(name='eblob_kit',
       author_email='shaitkir@gmail.com',
       py_modules=['eblob_kit'],
       install_requires=['Click', 'pyhash'],
-      setup_requires=['pytest-runner'],
+      setup_requires=[
+        'pytest-runner==2.9',
+        'setuptools_scm<=1.9',
+      ],
       tests_require=['pytest', 'pytest-mock'],
       entry_points='''
           [console_scripts]
