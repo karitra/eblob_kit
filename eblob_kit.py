@@ -51,6 +51,10 @@ def dump_to_file(file_name, results):
         return
 
     try:
+        directory_name = os.path.dirname(os.path.abspath(file_name))
+        if not os.path.exists(directory_name):
+            os.makedirs(directory_name)
+
         with open(file_name, 'wb') as out:
             json.dump({'files': results}, out)
     except Exception as e:
