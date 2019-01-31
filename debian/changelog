@@ -1,3 +1,9 @@
+eblob-kit (0.1.1) unstable; urgency=low
+
+  * feat: make path for resulting artifact file
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Thu, 31 Jan 2019 14:13:21 +0300
+
 eblob-kit (0.1.0) unstable; urgency=low
 
   * feat: verbose option, output result to json file
