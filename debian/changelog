@@ -1,3 +1,14 @@
+eblob-kit (0.1.2) unstable; urgency=medium
+
+  * refact: creation mode can be set for Blob,IndexFile
+  * feat: mark blob index as sorted on creation
+  * feat: prohibit distination files overwrite by default
+  * refact: join two if branches with same condition
+  * test: make tests passable with recent updates
+  * test: check for destination writability
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Wed, 06 Feb 2019 14:31:05 +0300
+
 eblob-kit (0.1.1) unstable; urgency=low
 
   * feat: make path for resulting artifact file
