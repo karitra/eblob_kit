@@ -64,8 +64,6 @@ def dump_to_file(file_name, results):
 def is_destination_writable(src_path, dst_path, overwrite=False):
     """Check if 'dst_path' file writable.
 
-    TODO(karapuz): tests.
-
     NOTE: always prohibit writing from src_path to dst_path if it is same file.
 
     """
@@ -1098,9 +1096,8 @@ class BlobRepairer(object):
 
         for header in self._blob.data:
             if not header:
-                logging.error('I have faced with broken record which I can not skip.')
-            if not header:
                 skipped_records += 1
+                logging.error('I have faced with broken record which I have to skip.')
             elif header.flags.removed:
                 removed_records += 1
             else:
