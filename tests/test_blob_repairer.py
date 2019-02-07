@@ -420,11 +420,15 @@ def test_fix(mocker):
     index_header = make_header(key='', data_size=1, disk_size=2, position=3, flags=4)
     index_file_class.return_value.__iter__.return_value = iter([index_header])
 
+    # TODO(karapuz): add test for sorted case
+    type(index_file_class.return_value).sorted = mocker.PropertyMock(return_value=False)
+
     # DataFile mock
     data_file_class = mocker.patch('eblob_kit.DataFile', autospec=True)
 
     # Blob mock
     mocker.patch('eblob_kit.Blob.create', )
+    mocker.patch('eblob_kit.is_destination_writable', return_value=True)
 
     mocker.patch('os.path.exists', return_value=True)
 
