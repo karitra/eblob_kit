@@ -407,10 +407,10 @@ class IndexFile(object):
         self._file = open(path, mode)
 
     @staticmethod
-    def create(path):
+    def create(path, mode='ab'):
         """Create IndexFile for @path."""
-        open(path, 'ab').close()
-        return IndexFile(path, mode='ab')
+        open(path, mode).close()
+        return IndexFile(path, mode=mode)
 
     @property
     def path(self):
@@ -524,11 +524,12 @@ class Blob(object):
         self._data_file = DataFile(path, mode)
 
     @staticmethod
-    def create(path):
+    def create(path, mark_index_sorted=False, mode='ab'):
         """Create new Blob at @path."""
-        open(path + '.index', 'ab').close()
-        open(path, 'ab').close()
-        return Blob(path, 'ab')
+        index_suffix = '.index.sorted' if mark_index_sorted else '.index'
+        open(path + index_suffix, mode).close()
+        open(path, mode).close()
+        return Blob(path, mode)
 
     @property
     def index(self):
