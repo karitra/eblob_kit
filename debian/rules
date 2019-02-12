@@ -1,6 +1,21 @@
 #!/usr/bin/make -f
 
+#
+# Nasty hack to allow installation of tox deps packages to
+# virtualenv: {home_dir}/.pydistutils.cfg  created if not exists on any
+# pybuild invocation (--clean/build/test) and contains `install-path`
+# set to system folders which in turn are write protected, so
+# easy_install fails to update setuptools, pip, etc on tox startup.
+#
+# If file is removed, it is recreated on next pybuild step invocation.
+#
+# It seems that virtualenv shipped with trusty is affected (other dists
+# are not checked).
+#
+export PYBUILD_BEFORE_TEST=truncate -s0 {home_dir}/.pydistutils.cfg
+export PYBUILD_AFTER_TEST=rm {home_dir}/.pydistutils.cfg
+
+export PYBUILD_TEST_TOX=1
+
 %:
-	dh $@ --with python2 --buildsystem=python_distutils
-
-
+	dh $@ --with python2 --buildsystem=pybuild
