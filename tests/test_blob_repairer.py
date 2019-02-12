@@ -14,6 +14,7 @@ TODO(karapuz): complete tests parameters docs.
 """
 import mock
 import pytest
+import sys
 
 from eblob_kit import BlobRepairer
 from eblob_kit import EllipticsHeader
@@ -31,6 +32,12 @@ TEST_INDEX_PATH = TEST_BLOB_PATH + '/' + 'test_data-0.0.index'
 TEST_INDEX_SORTED_PATH = TEST_BLOB_PATH + '/' + 'test_data-0.0.index.sorted'
 
 TEST_DATA_PATH = TEST_BLOB_PATH + '/' + TEST_BLOB_PREFIX
+
+
+if sys.version_info < (3, 0):
+    OPEN_TO_PATCH = '__builtin__.open'
+else:
+    OPEN_TO_PATCH = 'builtins.open'
 
 
 @pytest.mark.parametrize('header, data_len, check_result', [
@@ -406,6 +413,57 @@ def test_check_index_non_valid(_mocked_exists,
     assert blob_repairer.stat.index_order_error == index_order_error
 
     assert blob_repairer.stat.index_malformed_headers == 0
+
+
+@pytest.mark.parametrize('callee', [
+    BlobRepairer.recover_index,
+    BlobRepairer.recover_blob,
+    BlobRepairer.copy_valid_records,
+])
+@mock.patch('eblob_kit.is_destination_writable', return_value=True)
+@mock.patch(OPEN_TO_PATCH, new_callable=mock.mock_open)
+@mock.patch('eblob_kit.Blob', autospec=True)
+def test_fix_destination_writable(_mocked_blob,
+                                  _mocked_open,
+                                  _mocked_is_writable,
+                                  callee):
+    """Check if destination is writable.
+
+    Checks for `copy_valid_records`, `recover_index` and `recover_blob`.
+
+    """
+    blob_repairer = BlobRepairer('.')
+
+    if callee == BlobRepairer.recover_index:
+        callee(blob_repairer._blob.data, '.')
+    else:
+        callee(blob_repairer, '.')
+
+
+@pytest.mark.parametrize('callee', [
+    BlobRepairer.recover_index,
+    BlobRepairer.recover_blob,
+    BlobRepairer.copy_valid_records,
+])
+@mock.patch('eblob_kit.is_destination_writable', return_value=False)
+@mock.patch(OPEN_TO_PATCH, new_callable=mock.mock_open)
+@mock.patch('eblob_kit.Blob', autospec=True)
+def test_fix_destination_not_writable(_mocked_blob,
+                                      _mocked_open,
+                                      _mocked_is_writable,
+                                      callee):
+    """Check for exception if destination not writable.
+
+    Checks for `copy_valid_records`, `recover_index` and `recover_blob`.
+
+    """
+    blob_repairer = BlobRepairer('.')
+
+    with pytest.raises(RuntimeError):
+        if callee == BlobRepairer.recover_index:
+            callee(blob_repairer._blob.data, '.')
+        else:
+            callee(blob_repairer, '.')
 
 
 def test_fix(mocker):
