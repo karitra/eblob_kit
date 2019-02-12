@@ -5,8 +5,12 @@ Priority: optional
 Build-Depends: python-setuptools (>= 0.6b3),
                python-all (>= 2.6.6-3),
                debhelper (>= 7.4.3),
+               dh-python,
                python-click (>= 5.1),
-               python-certifi
+               python-certifi,
+               python-pyhash,
+               python-mock,
+               python-tox
 Standards-Version: 3.9.1
 X-Python-Version: >= 2.7
 
@@ -14,5 +18,6 @@ Package: eblob-kit
 Architecture: all
 Depends: ${misc:Depends},
          ${python:Depends},
-         python-click (>= 5.1)
+         python-click (>= 5.1),
+         python-pyhash
 Description: Toolkit for listing, checking and fixing eblob blobs.
