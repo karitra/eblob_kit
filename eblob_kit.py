@@ -61,6 +61,17 @@ def dump_to_file(file_name, results):
         logging.error('Failed to dump json report file %s: %s', file_name, e)
 
 
+def is_destination_writable(src_path, dst_path, overwrite=False):
+    """Check if 'dst_path' file writable.
+
+    TODO(karapuz): tests.
+
+    NOTE: always prohibit writing from src_path to dst_path if it is same file.
+
+    """
+    return not os.path.exists(dst_path) or (not os.path.samefile(src_path, dst_path) and overwrite)
+
+
 class ReportType(object):
     """Command result report types.
 
@@ -1042,10 +1053,14 @@ class BlobRepairer(object):
         return self._valid
 
     @staticmethod
-    def recover_index(data, destination):
+    def recover_index(data, destination, overwrite=False):
         """Recover index from data."""
         basename = os.path.basename(data.path)
         index_path = os.path.join(destination, basename + '.index')
+
+        if not is_destination_writable(data.path + '.index', index_path, overwrite):
+            raise RuntimeError("can't recover to already existing index file: {}".format(index_path))
+
         index = IndexFile.create(index_path)
 
         logging.info('Recovering index %s -> %s', data.path, index_path)
@@ -1065,11 +1080,15 @@ class BlobRepairer(object):
                           offset)
             break
 
-    def recover_blob(self, destination):
+    def recover_blob(self, destination, overwrite=False):
         """Recover blob from data."""
         basename = os.path.basename(self._blob.data.path)
         blob_path = os.path.join(destination, basename)
-        blob = Blob.create(blob_path)
+
+        if not is_destination_writable(self._blob.data.path,  blob_path, overwrite):
+            raise RuntimeError("can't recover to already existing blob file: {}".format(blob_path))
+
+        blob = Blob.create(path=blob_path)
 
         copied_records = 0
         removed_records = 0
@@ -1093,10 +1112,14 @@ class BlobRepairer(object):
                      skipped_records,
                      removed_records)
 
-    def copy_valid_records(self, destination):
+    def copy_valid_records(self, destination, overwrite=False):
         """Recover blob by copying only valid records from blob."""
         basename = os.path.basename(self._blob.data.path)
         blob_path = os.path.join(destination, basename)
+
+        if not is_destination_writable(self._blob.data.path,  blob_path, overwrite):
+            raise RuntimeError("can't copy valid records to already existing blob file: {}".format(blob_path))
+
         blob = Blob.create(blob_path)
 
         copied_records = 0
@@ -1116,7 +1139,7 @@ class BlobRepairer(object):
                      self._blob.data.path,
                      blob_path)
 
-    def fix(self, destination, noprompt):
+    def fix(self, destination, noprompt, overwrite=False):
         """Check blob's data & index and try to fix them if they are broken.
 
         TODO(karapuz): remove all interactive user interaction.
@@ -1133,16 +1156,16 @@ class BlobRepairer(object):
                 not self._stat.index_uncommitted_headers):
 
             if noprompt:
-                self.recover_blob(destination)
+                self.recover_blob(destination, overwrite=overwrite)
             elif click.confirm('There is no valid header in {}. '
                                'Should I try to recover index from {}?'
                                .format(self._blob.index.path, self._blob.data.path),
                                default=True):
-                self.recover_index(self._blob.data, destination)
+                self.recover_index(self._blob.data, destination, overwrite=overwrite)
             elif click.confirm('Should I try to recover both index and data from {}?'
                                .format(self._blob.data.path),
                                default=True):
-                self.recover_blob(destination)
+                self.recover_blob(destination, overwrite=overwrite)
         else:
             if not self._index_headers:
                 logging.error('Nothing can be recovered from %s, so it should be removed', self._blob.data.path)
@@ -1152,7 +1175,7 @@ class BlobRepairer(object):
                     pass
             elif noprompt or click.confirm('Should I repair {}?'.format(self._blob.data.path),
                                            default=True):
-                self.copy_valid_records(destination)
+                self.copy_valid_records(destination, overwrite=overwrite)
 
 
 def find_duplicates(blobs):
@@ -1456,9 +1479,11 @@ def check_command(ctx, path, verify_csum, fast):
 @click.argument('path')
 @click.option('-d', '--destination', prompt='Where should I place the index?',
               help='d for destination')
-def fix_index_command(path, destination):
+@click.option('-o', '--overwrite', is_flag=True, default=False,
+              help='Overwrite destination files')
+def fix_index_command(path, destination, overwrite):
     """Recover index for blob @PATH."""
-    BlobRepairer.recover_index(DataFile(path), destination)
+    BlobRepairer.recover_index(DataFile(path), destination, overwrite)
 
 
 @cli.command(name='fix_blob')
@@ -1467,8 +1492,10 @@ def fix_index_command(path, destination):
               help='d for destination')
 @click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
               help='Assume Yes to all queries and do not prompt')
+@click.option('-o', '--overwrite', is_flag=True, default=False,
+              help='Overwrite destination files')
 @click.pass_context
-def fix_blob_command(ctx, path, destination, noprompt):
+def fix_blob_command(ctx, path, destination, noprompt, overwrite):
     """Fix one blob @PATH.
 
     TODO(karapuz): get rid of noprompt and interactivity.
@@ -1483,7 +1510,7 @@ def fix_blob_command(ctx, path, destination, noprompt):
         os.mkdir(destination)
 
     blob_repairer = BlobRepairer(path)
-    blob_repairer.fix(destination, noprompt)
+    blob_repairer.fix(destination, noprompt, overwrite)
 
     # FIX_BLOB_STANDALONE - means that fix_blob_command not called from another subcommand.
     # TODO(karapuz): refactor ctx fields into well defined constants.
@@ -1502,8 +1529,10 @@ def fix_blob_command(ctx, path, destination, noprompt):
 @click.option('-y', '--yes', 'noprompt', is_flag=True, default=False,
               help="Assume Yes to all queries and do not prompt, "
               "will be switched on when verbosity option not set")
+@click.option('-o', '--overwrite', is_flag=True, default=False,
+              help='Overwrite destination files')
 @click.pass_context
-def fix_command(ctx, path, destination, noprompt):
+def fix_command(ctx, path, destination, noprompt, overwrite):
     """Fix blobs @PATH."""
     verbosity = ctx.obj.get('VERBOSITY', Verbosity.JSON)
 
@@ -1514,7 +1543,7 @@ def fix_command(ctx, path, destination, noprompt):
 
     for blob in files(path):
         try:
-            ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt)
+            ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt, overwrite=overwrite)
         except Exception as exc:
             logging.error('Failed to fix %s: %s', blob, exc)
 
