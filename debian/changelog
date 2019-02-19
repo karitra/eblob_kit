@@ -1,3 +1,9 @@
+eblob-kit (0.1.3) unstable; urgency=medium
+
+  * fix: rethrow fix_blob_command exception
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Tue, 19 Feb 2019 17:14:26 +0300
+
 eblob-kit (0.1.2) unstable; urgency=medium
 
   * refact: creation mode can be set for Blob,IndexFile
