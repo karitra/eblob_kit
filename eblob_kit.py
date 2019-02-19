@@ -1543,6 +1543,7 @@ def fix_command(ctx, path, destination, noprompt, overwrite):
             ctx.invoke(fix_blob_command, path=blob, destination=destination, noprompt=noprompt, overwrite=overwrite)
         except Exception as exc:
             logging.error('Failed to fix %s: %s', blob, exc)
+            raise
 
     results = ctx.obj.get(ReportType.EXTENDED, {})
     results_digest = ctx.obj.get(ReportType.BASIC, {})
