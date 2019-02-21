@@ -1,3 +1,10 @@
+eblob-kit (0.1.4) unstable; urgency=medium
+
+  * fix: make tests work with modern pytest version
+  * chore: switch debian buildsystem to pybuild
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Thu, 21 Feb 2019 12:53:37 +0300
+
 eblob-kit (0.1.3) unstable; urgency=medium
 
   * fix: rethrow fix_blob_command exception
