@@ -500,9 +500,9 @@ def test_fix(mocker):
 
     # Check the self.check method
     assert blob_repairer.check.call_count == 1
-    blob_repairer.check.assert_called_with(True, False)
+    blob_repairer.check.assert_called_with(verify_csum=True, fast=False)
 
     assert blob_repairer.check_index.call_count == 1
-    blob_repairer.check_index.assert_called_with(False)
+    blob_repairer.check_index.assert_called_with(fast=False)
 
     assert blob_repairer.print_check_report.call_count == 1
