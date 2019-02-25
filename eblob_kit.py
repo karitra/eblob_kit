@@ -416,10 +416,12 @@ class IndexFile(object):
         self._file = open(path, mode)
 
     @staticmethod
-    def create(path, mode='ab'):
-        """Create IndexFile for @path."""
-        open(path, mode).close()
-        return IndexFile(path, mode=mode)
+    def create(path):
+        """Create IndexFile for @path.
+
+        NOTE: underlying file is truncuated if exists.
+        """
+        return IndexFile(path=path, mode='wb')
 
     @property
     def path(self):
@@ -533,12 +535,19 @@ class Blob(object):
         self._data_file = DataFile(path, mode)
 
     @staticmethod
-    def create(path, mark_index_sorted=False, mode='ab'):
-        """Create new Blob at @path."""
+    def create(path, mark_index_sorted=False):
+        """Create new Blob at @path.
+
+        NOTE: underlying files are truncuated if they are exist.
+        """
         index_suffix = '.index.sorted' if mark_index_sorted else '.index'
-        open(path + index_suffix, mode).close()
-        open(path, mode).close()
-        return Blob(path, mode)
+
+        create_mode = 'wb'
+        # Index is checked for existance on Blob creation, so we should create it
+        # beforehand, but data file would be created within Blob constructor.
+        open(path + index_suffix, create_mode).close()
+
+        return Blob(path=path, mode=create_mode)
 
     @property
     def index(self):
