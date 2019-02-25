@@ -1,3 +1,11 @@
+eblob-kit (0.1.5) unstable; urgency=medium
+
+  * refact: select data, index file creation mode based on overwrite flag
+  * test: move 'open' symbol detection to .common
+  * test: add tests for blob and index files creation
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Mon, 25 Feb 2019 15:31:56 +0300
+
 eblob-kit (0.1.4) unstable; urgency=medium
 
   * fix: make tests work with modern pytest version
