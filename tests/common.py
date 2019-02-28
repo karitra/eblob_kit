@@ -1,7 +1,14 @@
 """Tests common stuff."""
 import struct
+import sys
 
 import eblob_kit
+
+
+if sys.version_info < (3, 0):
+    OPEN_TO_PATCH = '__builtin__.open'
+else:
+    OPEN_TO_PATCH = 'builtins.open'
 
 
 def generate_key(start=0):

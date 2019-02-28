@@ -21,6 +21,7 @@ from eblob_kit import EllipticsHeader
 from eblob_kit import RecordFlags
 
 from common import make_header
+from common import OPEN_TO_PATCH
 
 
 TEST_BLOB_PATH = 'src/path'
@@ -32,12 +33,6 @@ TEST_INDEX_PATH = TEST_BLOB_PATH + '/' + 'test_data-0.0.index'
 TEST_INDEX_SORTED_PATH = TEST_BLOB_PATH + '/' + 'test_data-0.0.index.sorted'
 
 TEST_DATA_PATH = TEST_BLOB_PATH + '/' + TEST_BLOB_PREFIX
-
-
-if sys.version_info < (3, 0):
-    OPEN_TO_PATCH = '__builtin__.open'
-else:
-    OPEN_TO_PATCH = 'builtins.open'
 
 
 @pytest.mark.parametrize('header, data_len, check_result', [
