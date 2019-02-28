@@ -5,6 +5,10 @@ import sys
 import eblob_kit
 
 
+INDEX_SORTED_SUFFIX = '.index.sorted'
+DATA_SORTED_SUFFIX = '.data_is_sorted'
+
+
 if sys.version_info < (3, 0):
     OPEN_TO_PATCH = '__builtin__.open'
 else:
