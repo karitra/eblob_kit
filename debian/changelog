@@ -1,3 +1,9 @@
+eblob-kit (0.1.6) unstable; urgency=medium
+
+  * fix: make output of `fix_blob` and `fix` command similar
+
+ -- Evgenii Gorinov <jonny-k@yandex-team.ru>  Fri, 05 Apr 2019 12:41:31 +0300
+
 eblob-kit (0.1.5) unstable; urgency=medium
 
   * refact: select data, index file creation mode based on overwrite flag
