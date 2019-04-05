@@ -1521,8 +1521,8 @@ def fix_blob_command(ctx, path, destination, noprompt, overwrite):
     # FIX_BLOB_STANDALONE - means that fix_blob_command not called from another subcommand.
     # TODO(karapuz): refactor ctx fields into well defined constants.
     if ctx.obj.get('FIX_BLOB_STANDALONE', True):
-        dump_digest(verbosity, blob_repairer.stat.as_digest_dict)
-        dump_to_file(ctx.obj.get(JSON_OUTPUT), blob_repairer.stat.as_dict)
+        dump_digest(verbosity, {path: blob_repairer.stat.as_digest_dict})
+        dump_to_file(ctx.obj.get(JSON_OUTPUT), {path: blob_repairer.stat.as_dict})
     else:  # run as child.
         ctx.obj.setdefault(ReportType.EXTENDED, {})[path] = blob_repairer.stat.as_dict
         ctx.obj.setdefault(ReportType.BASIC, {})[path] = blob_repairer.stat.as_digest_dict
