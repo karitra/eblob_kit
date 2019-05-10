@@ -19,10 +19,9 @@ else:
     OPEN_TO_PATCH = 'builtins.open'
 
 
-def _make_buffer_with_valid_diskcontrol(buffer_size, disk_control_offset, disk_control):
-    b = bytearray(buffer_size)
-    b[disk_control_offset: disk_control_offset + eblob_kit.DiskControl.size] = common.header_to_bytes(disk_control)
-
+def _make_buffer_with_valid_diskcontrol(disk_control_offset, disk_control):
+    b = bytearray(disk_control_offset)
+    b.extend(common.header_to_bytes(disk_control))
     return b
 
 
@@ -48,8 +47,7 @@ def disk_control(request):
 @pytest.mark.parametrize('disk_control_offset', xrange(TEST_OFFSETS_RANGE))
 def test_read_disk_control_valid(mocker, disk_control, disk_control_offset):
     """Test read_disk_control along with eblob_kit.DataFile.read method."""
-    dummy_buffer = _make_buffer_with_valid_diskcontrol(eblob_kit.DiskControl.size * 2,
-                                                       disk_control_offset,
+    dummy_buffer = _make_buffer_with_valid_diskcontrol(disk_control_offset,
                                                        disk_control)
 
     with mocker.patch(OPEN_TO_PATCH, return_value=StringIO.StringIO(dummy_buffer)),\
@@ -65,9 +63,10 @@ def test_read_disk_control_valid(mocker, disk_control, disk_control_offset):
 @pytest.mark.parametrize('disk_control_offset', xrange(TEST_OFFSETS_RANGE))
 def test_read_disk_control_with_exception(mocker, disk_control, disk_control_offset):
     """Test read_disk_control exceptions."""
-    dummy_buffer = _make_buffer_with_valid_diskcontrol(eblob_kit.DiskControl.size - 1,
-                                                       disk_control_offset,
+    dummy_buffer = _make_buffer_with_valid_diskcontrol(disk_control_offset,
                                                        disk_control)
+    # Truncate buffer to make it invalid
+    dummy_buffer = dummy_buffer[:disk_control_offset + eblob_kit.DiskControl.size - 1]
 
     with mocker.patch(OPEN_TO_PATCH, return_value=StringIO.StringIO(dummy_buffer)),\
             mocker.patch('eblob_kit.DataFile.__len__', return_value=len(dummy_buffer)):
