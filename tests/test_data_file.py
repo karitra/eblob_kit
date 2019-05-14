@@ -59,7 +59,7 @@ def test_read_disk_control_valid(mocker, disk_control, disk_control_offset):
         assert dummy_disk_control == disk_control
 
 
-@pytest.mark.xfail(raises=EOFError)
+@pytest.mark.xfail(raises=EOFError, strict=True)
 @pytest.mark.parametrize('disk_control_offset', xrange(TEST_OFFSETS_RANGE))
 def test_read_disk_control_with_exception(mocker, disk_control, disk_control_offset):
     """Test read_disk_control exceptions."""
