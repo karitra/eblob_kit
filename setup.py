@@ -21,7 +21,7 @@ class PyTest(TestCommand):
 
 
 setup(name='eblob_kit',
-      version='0.1.6',
+      version='0.1.7',
       author='Kirill Smorodinnikov',
       author_email='shaitkir@gmail.com',
       py_modules=['eblob_kit'],

@@ -1,3 +1,11 @@
+eblob-kit (0.1.7) unstable; urgency=medium
+
+  * feat: check_result flag to verify fix results
+  * feat: option to move restored data to origins
+  * test: move_back option support
+
+ -- Alex Karev <karapuz@yandex-team.ru>  Tue, 02 Jul 2019 02:32:57 +0300
+
 eblob-kit (0.1.6) unstable; urgency=medium
 
   * fix: make output of `fix_blob` and `fix` command similar
