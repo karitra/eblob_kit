@@ -1222,12 +1222,22 @@ class BlobRepairer(object):
                      skipped_records,
                      removed_records)
 
+        logging.info('Post recover blob processing: check_result="%s", move_back="%s"',
+                     check_result,
+                     move_back)
+
+        if check_result and not BlobRepairer(blob_path).check(verify_csum=True, fast=False):
+            logging.error("check of fixed blob failed: path='%s'", blob_path)
+            raise RuntimeError('restored blob check has been failed')
+
         if move_back:
             self._blob.close()
-            self._blob.move_from(from_index=destination_index_path,
-                                 from_data=destination_data_path)
+            self._blob.move_back(from_index=destination_index_path,
+                                 from_data=destination_data_path,
+                                 to_index=self._blob.index.path,
+                                 to_data=self._blob.data.path)
 
-    def copy_valid_records(self, destination, overwrite=False, move_back=False):
+    def copy_valid_records(self, destination, overwrite=False, move_back=False, check_result=False):
         """Recover blob by copying only valid records from blob."""
         basename = os.path.basename(self._blob.data.path)
         blob_path = os.path.join(destination, basename)
@@ -1256,13 +1266,21 @@ class BlobRepairer(object):
                          self._blob.data.path,
                          blob_path)
 
+        if check_result and not BlobRepairer(blob_path).check(verify_csum=True, fast=False):
+            logging.error("check of fixed blob failed: path='%s'", blob_path)
+            raise RuntimeError('restored blob check has been failed')
+
         if move_back:
             # Both destination and source blobs should be closed at this point.
             self._blob.close()
-            self._blob.move_from(from_index=destination_index_path,
-                                 from_data=destination_blob_path)
+            to_index, to_data = self._blob.get_index_data_path_tuple()
 
-    def fix(self, destination, noprompt, overwrite=False, move_back=False):
+            self._blob.move_back(from_index=destination_index_path,
+                                 from_data=destination_blob_path,
+                                 to_index=to_index,
+                                 to_data=to_data)
+
+    def fix(self, destination, noprompt, overwrite=False, move_back=False, check_result=False):
         """Check blob's data & index and try to fix them if they are broken.
 
         TODO(karapuz): remove all interactive user interaction.
@@ -1280,16 +1298,25 @@ class BlobRepairer(object):
                 not self._stat.index_uncommitted_headers):
 
             if noprompt:
-                self.recover_blob(destination, overwrite=overwrite, move_back=move_back)
+                self.recover_blob(destination,
+                                  overwrite=overwrite,
+                                  move_back=move_back,
+                                  check_result=check_result)
             elif click.confirm('There is no valid header in {}. '
                                'Should I try to recover index from {}?'
                                .format(self._blob.index.path, self._blob.data.path),
                                default=True):
-                self.recover_index(self._blob.data, destination, overwrite=overwrite, move_back=move_back)
+                self.recover_index(self._blob.data,
+                                   destination,
+                                   overwrite=overwrite,
+                                   move_back=move_back)
             elif click.confirm('Should I try to recover both index and data from {}?'
                                .format(self._blob.data.path),
                                default=True):
-                self.recover_blob(destination, overwrite=overwrite, move_back=move_back)
+                self.recover_blob(destination,
+                                  overwrite=overwrite,
+                                  move_back=move_back,
+                                  check_result=check_result)
         else:
             if not self._index_headers:
                 logging.error('Nothing can be recovered from %s, so it should be removed', self._blob.data.path)
@@ -1300,7 +1327,10 @@ class BlobRepairer(object):
                     pass
             elif noprompt or click.confirm('Should I repair {}?'.format(self._blob.data.path),
                                            default=True):
-                self.copy_valid_records(destination, overwrite=overwrite, move_back=move_back)
+                self.copy_valid_records(destination,
+                                        overwrite=overwrite,
+                                        move_back=move_back,
+                                        check_result=check_result)
 
 
 def find_duplicates(blobs):
@@ -1621,8 +1651,10 @@ def fix_index_command(path, destination, overwrite):
               help='Overwrite destination files')
 @click.option('-m', '--move-back', is_flag=True, default=False,
               help='Move restored files from destination back to original path')
+@click.option('-c', '--check-result', is_flag=True, default=False,
+              help='Run check on resulting blob')
 @click.pass_context
-def fix_blob_command(ctx, path, destination, noprompt, overwrite, move_back):
+def fix_blob_command(ctx, path, destination, noprompt, overwrite, move_back, check_result):
     """Fix one blob @PATH.
 
     TODO(karapuz): get rid of noprompt and interactivity.
@@ -1637,7 +1669,7 @@ def fix_blob_command(ctx, path, destination, noprompt, overwrite, move_back):
         os.mkdir(destination)
 
     blob_repairer = BlobRepairer(path)
-    blob_repairer.fix(destination, noprompt, overwrite, move_back)
+    blob_repairer.fix(destination, noprompt, overwrite, move_back, check_result)
 
     # FIX_BLOB_STANDALONE - means that fix_blob_command not called from another subcommand.
     # TODO(karapuz): refactor ctx fields into well defined constants.
@@ -1660,8 +1692,10 @@ def fix_blob_command(ctx, path, destination, noprompt, overwrite, move_back):
               help='Overwrite destination files')
 @click.option('-m', '--move-back', is_flag=True, default=False,
               help='Move restored files from destination back to original path')
+@click.option('-c', '--check-result', is_flag=True, default=False,
+              help='Run check on resulting blob')
 @click.pass_context
-def fix_command(ctx, path, destination, noprompt, overwrite, move_back):
+def fix_command(ctx, path, destination, noprompt, overwrite, move_back, check_result):
     """Fix blobs @PATH."""
     verbosity = ctx.obj.get('VERBOSITY', Verbosity.JSON)
 
@@ -1677,7 +1711,8 @@ def fix_command(ctx, path, destination, noprompt, overwrite, move_back):
                        destination=destination,
                        noprompt=noprompt,
                        overwrite=overwrite,
-                       move_back=move_back)
+                       move_back=move_back,
+                       check_result=check_result)
         except Exception as exc:
             logging.error('Failed to fix %s: %s', blob, exc)
             raise
