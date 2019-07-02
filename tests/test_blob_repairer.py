@@ -14,7 +14,6 @@ TODO(karapuz): complete tests parameters docs.
 """
 import mock
 import pytest
-import sys
 
 from eblob_kit import BlobRepairer
 from eblob_kit import EllipticsHeader
@@ -418,7 +417,7 @@ def test_check_index_non_valid(_mocked_exists,
 @mock.patch('eblob_kit.is_destination_writable', return_value=True)
 @mock.patch(OPEN_TO_PATCH, new_callable=mock.mock_open)
 @mock.patch('eblob_kit.Blob', autospec=True)
-def test_fix_destination_writable(_mocked_blob,
+def test_fix_destination_writable(mocked_blob,
                                   _mocked_open,
                                   _mocked_is_writable,
                                   callee):
@@ -427,6 +426,9 @@ def test_fix_destination_writable(_mocked_blob,
     Checks for `copy_valid_records`, `recover_index` and `recover_blob`.
 
     """
+    mocked_blob.create.return_value = mocked_blob
+    mocked_blob.get_index_data_path_tuple.return_value = (None, None)
+
     blob_repairer = BlobRepairer('.')
 
     if callee == BlobRepairer.recover_index:
@@ -477,10 +479,14 @@ def test_fix(mocker):
     type(index_file_class.return_value).sorted = mocker.PropertyMock(return_value=False)
 
     # DataFile mock
-    data_file_class = mocker.patch('eblob_kit.DataFile', autospec=True)
+    mocker.patch('eblob_kit.DataFile', autospec=True)
 
     # Blob mock
-    mocker.patch('eblob_kit.Blob.create', )
+    mocked_blob = mock.Mock()
+    mocked_blob.create.return_value = mocked_blob
+    mocked_blob.get_index_data_path_tuple.return_value = (None, None)
+
+    mocker.patch('eblob_kit.Blob.create', return_value=mocked_blob)
     mocker.patch('eblob_kit.is_destination_writable', return_value=True)
 
     mocker.patch('os.path.exists', return_value=True)

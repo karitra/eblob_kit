@@ -33,3 +33,13 @@ def test_create_valid(mocked_open, mocked_exists):
 def test_create_incorrect_path():
     """Test Blob.create static method with incorrect path."""
     eblob_kit.Blob.create('')
+
+
+@mock.patch('eblob_kit.Blob', autospec=True)
+def test_blob_managed_close(mocked_blob):
+    """Test blob context manager."""
+    mocked_blob.create.return_value = mocked_blob
+    with eblob_kit.managed_blob(''):
+        pass
+
+    assert mocked_blob.close.call_count == 1

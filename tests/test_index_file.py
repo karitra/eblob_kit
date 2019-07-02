@@ -28,3 +28,13 @@ def test_create_invalid_path():
 def test_create_incorrect_path():
     """Test IndexFile.create static method with incorrect path."""
     eblob_kit.IndexFile.create('some/path/to/index')
+
+
+@mock.patch('eblob_kit.IndexFile', autospec=True)
+def test_index_managed_close(mocked_index):
+    """Test index context manager."""
+    mocked_index.create.return_value = mocked_index
+    with eblob_kit.managed_index(''):
+        pass
+
+    mocked_index.create.return_value = mocked_index
