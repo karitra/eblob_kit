@@ -429,6 +429,8 @@ def test_fix_destination_writable(mocked_blob,
     mocked_blob.create.return_value = mocked_blob
     mocked_blob.get_index_data_path_tuple.return_value = (None, None)
 
+    type(mocked_blob.return_value.data).path = mock.PropertyMock(return_value='data')
+
     blob_repairer = BlobRepairer('.')
 
     if callee == BlobRepairer.recover_index:
@@ -445,7 +447,7 @@ def test_fix_destination_writable(mocked_blob,
 @mock.patch('eblob_kit.is_destination_writable', return_value=False)
 @mock.patch(OPEN_TO_PATCH, new_callable=mock.mock_open)
 @mock.patch('eblob_kit.Blob', autospec=True)
-def test_fix_destination_not_writable(_mocked_blob,
+def test_fix_destination_not_writable(mocked_blob,
                                       _mocked_open,
                                       _mocked_is_writable,
                                       callee):
@@ -454,6 +456,8 @@ def test_fix_destination_not_writable(_mocked_blob,
     Checks for `copy_valid_records`, `recover_index` and `recover_blob`.
 
     """
+    type(mocked_blob.return_value.data).path = mock.PropertyMock(return_value='data')
+
     blob_repairer = BlobRepairer('.')
 
     with pytest.raises(RuntimeError):

@@ -23,8 +23,24 @@ import pyhash
 
 
 INDEX_SUFFIX = '.index'
-SORTED_INDEX_SUFFIX = INDEX_SUFFIX + '.sorted'
+SORTED_INDEX_MARK = '.sorted'
+SORTED_INDEX_SUFFIX = INDEX_SUFFIX + SORTED_INDEX_MARK
+
+SORTED_DATA_SUFFIX = '.data_is_sorted'
 TO_REMOVE_SUFFIX = '.should_be_removed'
+
+
+def is_sorted(lst, key=lambda x: x):
+    """Check whether the sequence is sorted.
+
+    Source: https://stackoverflow.com/a/3755153
+
+    """
+    for i, el in enumerate(lst[1:]):
+        if key(el) < key(lst[i]): # i is the index of the previous element
+            return False
+
+    return True
 
 
 @contextmanager
@@ -467,26 +483,36 @@ class IndexFile(object):
         """Close underlying file."""
         self._file.close()
 
-    @staticmethod
-    def move_back(from_index, to_index):
-        """Move underlying file(s) between specified pathes."""
-        if not to_index.endswith(SORTED_INDEX_SUFFIX):
-            # Move possible sorted repeared index to not sorted original.
-            shutil.move(src=from_index, dst=to_index)
-            return
+    def remove(self):
+        """Remove underlying file(s)."""
+        if not self._file.closed:
+            self.close()
 
-        if not from_index.endswith(SORTED_INDEX_SUFFIX):
-            # State when destination index is sorted, but repaired index isn't
-            # sorted. Store destination file with specified suffix.
-            temporary_name = to_index + TO_REMOVE_SUFFIX
+        current_path = os.path.abspath(self._file.name)
+        logging.info('Removing index file: filename="%s"', current_path)
+        os.remove(current_path)
 
-            shutil.move(src=to_index, dst=temporary_name)
-            shutil.move(src=from_index, dst=to_index)
-            return
+    def move_to(self, remote_folder, reopen_mode='ab+'):
+        """Move underlying file(s) to remote_folder."""
+        if not os.path.isdir(remote_folder):
+            raise ValueError('not a folder: "{}"'.format(remote_folder))
 
-        # NOTE: Moving from sorted index to possibly unsorted.
-        # Don't mark destination as sroted for sake of simplicity.
-        shutil.move(src=from_index, dst=to_index)
+        should_reopen = False
+        if not self._file.closed:
+            should_reopen = True
+            self.close()
+
+        current_path = self.file.name
+        logging.debug('Moving index file: from="%s", remote_folder="%s"',
+                      current_path, remote_folder)
+
+        shutil.move(src=current_path, dst=remote_folder)
+
+        if should_reopen:
+            remote_path = os.path.basename(current_path)
+            remote_path = os.path.join(remote_folder, remote_path)
+
+            self._file = open(remote_path, mode=reopen_mode)
 
     def append(self, header):
         """Append header to index."""
@@ -522,7 +548,7 @@ class DataFile(object):
 
     def __init__(self, path, mode='rb'):
         """Initialize DataFile object again @path."""
-        self.sorted = os.path.exists(path + '.data_is_sorted') and \
+        self.sorted = os.path.exists(path + SORTED_DATA_SUFFIX) and \
             os.path.exists(path + SORTED_INDEX_SUFFIX)
         self._file = open(path, mode)
 
@@ -540,10 +566,44 @@ class DataFile(object):
         """Close underlying file."""
         self._file.close()
 
-    @staticmethod
-    def move_back(from_data, to_data):
-        """Move underlying file(s) between specified pathes."""
-        shutil.move(src=from_data, dst=to_data)
+    def remove(self):
+        if not self._file.closed:
+            self.close()
+
+        current_path = os.path.abspath(self._file.name)
+        logging.info('Removing data file: filename="%s"', current_path)
+        os.remove(current_path)
+
+        current_path_sorted_mark = current_path + SORTED_DATA_SUFFIX
+        if self.sorted and os.path.exists(current_path_sorted_mark):
+            logging.info('Removing sorted mark: filename="%s"', current_path_sorted_mark)
+            os.remove(current_path_sorted_mark)
+
+    def move_to(self, remote_folder, reopen_mode='ab+'):
+        """Move underlying files to remote folder."""
+        if not os.path.isdir(remote_folder):
+            raise ValueError('not a folder: "{}"'.format(remote_folder))
+
+        should_reopen = False
+        if not self._file.closed:
+            should_reopen = True
+            self._file.close()
+
+        current_path = self.file.name
+        logging.debug('Moving data file: from="%s", remote_folder="%s"', current_path, remote_folder)
+        shutil.move(src=current_path, dst=remote_folder)
+
+        if self.sorted:
+            current_path_sorted_mark = current_path + SORTED_DATA_SUFFIX
+            logging.debug('Moving data file sorted mark: from="%s", remote_folder="%s"',
+                          current_path_sorted_mark, remote_folder)
+            shutil.move(src=current_path_sorted_mark, dst=remote_folder)
+
+        if should_reopen:
+            remote_path = os.path.basename(current_path)
+            remote_path = os.path.join(remote_folder, remote_path)
+
+            self._file = open(remote_path, mode=reopen_mode)
 
     def read_disk_control(self, position):
         """Read DiskControl at @offset."""
@@ -599,17 +659,21 @@ class Blob(object):
         self._data_file = DataFile(path, mode)
 
     @staticmethod
-    def create(path, is_index_sorted=False):
+    def create(path, is_blob_sorted=False):
         """Create new Blob at @path.
 
         NOTE: underlying files are truncated if they are exist.
         """
-        index_suffix = SORTED_INDEX_SUFFIX if is_index_sorted else INDEX_SUFFIX
+        index_suffix = SORTED_INDEX_SUFFIX if is_blob_sorted else INDEX_SUFFIX
 
         create_mode = 'wb'
         # Index is checked for existence on Blob creation, so we should create it
         # beforehand, but data file would be created within Blob constructor.
         open(path + index_suffix, create_mode).close()
+
+        if is_blob_sorted:
+            # Create sorted marker for data blob
+            open(path + SORTED_DATA_SUFFIX, create_mode).close()
 
         return Blob(path=path, mode=create_mode)
 
@@ -618,29 +682,33 @@ class Blob(object):
         """Return index file."""
         return self._index_file
 
+    @index.setter
+    def index(self, new_index):
+        """Set provided index structure."""
+        self._index_file.close()
+        self._index_file = new_index
+
     @property
     def data(self):
         """Return data file."""
         return self._data_file
-
-    def get_index_data_path_tuple(self):
-        """Get underlying files paths."""
-        return self.index.path, self.data.path
 
     def close(self):
         """Closes underlying files."""
         self._index_file.close()
         self._data_file.close()
 
-    @staticmethod
-    def move_back(from_index, from_data, to_index, to_data):
-        """Move underlying file(s) between specified pathes."""
-        logging.info('Moving blob files back: from_index="%s", from_data="%s", to_index="%s", to_data="%s"',
-                     from_index, from_data,
-                     to_index, to_data)
+    def remove(self):
+        """Remove underlying file(s)."""
+        self._index_file.remove()
+        self._data_file.remove()
 
-        DataFile.move_back(from_data=from_data, to_data=to_data)
-        IndexFile.move_back(from_index=from_index, to_index=to_index)
+    def move_to(self, remote_folder):
+        """Move underlying file(s) to remote folder."""
+        logging.info('Moving blob files back: remote_folder="%s"', remote_folder)
+
+        self._index_file.move_to(remote_folder)
+        self._data_file.move_to(remote_folder)
 
     def _murmur_chunk(self, chunk):
         """Apply murmurhash to chunk and return raw result."""
@@ -859,11 +927,15 @@ class BlobRepairer(object):
 
     def __init__(self, path):
         """Initialize BlobRepairer for blob at @path."""
+
         self._blob = Blob(path)
+
         self._valid = True
 
         self._index_headers = []
         self._stat = BlobRepairerStat()
+
+        self._sorted_index_headers = False
 
     @property
     def stat(self):
@@ -877,6 +949,11 @@ class BlobRepairer(object):
         True, if it wasn't any inconsistency found while processing blob.
         """
         return self._valid
+
+    @property
+    def blob(self):
+        """Get target blob."""
+        return self._blob
 
     def check_header(self, header):
         """Check header correctness."""
@@ -1150,28 +1227,35 @@ class BlobRepairer(object):
             self._valid = False
             self.check_hole(position, len(self._blob.data))
 
+        self._sorted_index_headers = is_sorted(lst=valid_headers, key=lambda h: h.key)
         self._index_headers = valid_headers
 
         return self._valid
 
     @staticmethod
-    def recover_index(data, destination, overwrite=False, move_back=False):
+    def recover_index(data, destination, overwrite=False, move_back=False, check_result=False):
         """Recover index from data."""
-        basename = os.path.basename(data.path)
-        index_path = os.path.join(destination, basename + INDEX_SUFFIX)
 
-        if not is_destination_writable(data.path + INDEX_SUFFIX, index_path, overwrite):
-            raise RuntimeError("can't recover to already existing index file: {}".format(index_path))
+        # It is assumed that original index could be absent, therefore it is
+        # marked here without '.sorted' suffix, so later on move_back stage, original
+        # 'sorted' index, if it exist, will be not removed.
+        source_index_path = os.path.abspath(data.path + INDEX_SUFFIX)
 
-        logging.info('Recovering index %s -> %s', data.path, index_path)
+        destination_index_basename = os.path.basename(source_index_path)
+        destination_index_path = os.path.join(destination, destination_index_basename)
 
-        with managed_index(index_path) as index:
+        if not is_destination_writable(source_index_path, destination_index_path, overwrite):
+            raise RuntimeError(
+                "can't recover to already existing index file: {}".format(destination_index_path)
+            )
 
-            destination_index_path = index.path
+        logging.info('Recovering index from data %s -> %s', data.path, destination_index_path)
+
+        with managed_index(destination_index_path) as destination_index:
 
             for header in data:
                 if header:
-                    index.append(header)
+                    destination_index.append(header)
                     continue
 
                 offset = data.file.tell() - DiskControl.size
@@ -1179,33 +1263,65 @@ class BlobRepairer(object):
                 logging.error('This record can not be skipped, so I break the recovering. '
                               'You can use %s as an index for %s but it does not include '
                               'records after %s offset',
-                              index.path,
+                              destination_index.path,
                               data.path,
                               offset)
+
                 break
 
-        logging.info('Recover_index post processing: move_back="%s"', move_back)
+            logging.info('Recover_index post processing: move_back="%s", check_result="%s"',
+                         move_back,
+                         check_result)
 
-        if move_back:
-            IndexFile.move_back(from_index=destination_index_path, to_index=data.path + INDEX_SUFFIX)
+            if check_result:
+                # NOTE: internally blob opened with underlying index file, but open
+                # would failed if there is no index file for some reason.
+                repairer = BlobRepairer(data.path)
+
+                try:
+                    repairer.blob.index = IndexFile(destination_index.path)
+                    repairer.check_index(fast=False)
+                finally:
+                    repairer.blob.close()
+
+                if not repairer.valid:
+                    logging.error("Check of recovered index failed: path='%s'",
+                                  destination_index.path)
+                    raise RuntimeError('restored index check has been failed')
+
+            if move_back:
+                source_folder = os.path.dirname(source_index_path)
+
+                logging.info('Replacing index: from="%s", remote_folder="%s"',
+                             destination_index.path, source_folder)
+
+                try:
+                    # NOTE: warning, all index data for `blob` would be deleted.
+                    source_index = IndexFile(source_index_path)
+                    source_index.remove()
+                except EnvironmentError as e:
+                    logging.warn("Remove of index file has been failed: error='%s', path='%s'",
+                                 e, source_index_path)
+
+                destination_index.move_to(source_folder)
 
     def recover_blob(self, destination, overwrite=False, move_back=False, check_result=False):
         """Recover blob from data."""
-        basename = os.path.basename(self._blob.data.path)
-        blob_path = os.path.join(destination, basename)
 
-        if not is_destination_writable(self._blob.data.path,  blob_path, overwrite):
-            raise RuntimeError("can't recover to already existing blob file: {}".format(blob_path))
+        source_blob_path = self._blob.data.path
+        basename = os.path.basename(source_blob_path)
+        destination_blob_path = os.path.join(destination, basename)
+
+        if not is_destination_writable(source_blob_path, destination_blob_path, overwrite):
+            raise RuntimeError("can't recover to already existing blob file: {}".format(destination_blob_path))
 
         copied_records = 0
         removed_records = 0
         skipped_records = 0
 
-        logging.info('Recovering blob %s -> %s', self._blob.data.path, blob_path)
+        logging.info('Recovering blob %s -> %s', source_blob_path, destination_blob_path)
 
-        with managed_blob(blob_path, self._blob.index.sorted) as blob:
-
-            destination_index_path, destination_data_path = blob.get_index_data_path_tuple()
+        with managed_blob(destination_blob_path, self._sorted_index_headers) as destination_blob:
 
             for header in self._blob.data:
                 if not header:
@@ -1214,71 +1330,75 @@ class BlobRepairer(object):
                 elif header.flags.removed:
                     removed_records += 1
                 else:
-                    copy_record(self._blob, blob, header)
+                    copy_record(self._blob, destination_blob, header)
                     copied_records += 1
 
-        logging.info('I have copied %s records, skipped %s and removed %s records',
-                     copied_records,
-                     skipped_records,
-                     removed_records)
+            logging.info('I have copied %s records, skipped %s and removed %s records',
+                         copied_records,
+                         skipped_records,
+                         removed_records)
 
-        logging.info('Post recover blob processing: check_result="%s", move_back="%s"',
-                     check_result,
-                     move_back)
+            logging.info('Post recover blob processing: check_result="%s", move_back="%s"',
+                         check_result, move_back)
 
-        if check_result and not BlobRepairer(blob_path).check(verify_csum=True, fast=False):
-            logging.error("check of fixed blob failed: path='%s'", blob_path)
-            raise RuntimeError('restored blob check has been failed')
+            if check_result:
+                if not BlobRepairer(destination_blob_path).check(verify_csum=True, fast=False):
+                    logging.error("check of fixed blob failed: path='%s'", destination_blob_path)
+                    raise RuntimeError('restored blob check has been failed')
 
-        if move_back:
-            self._blob.close()
-            self._blob.move_back(from_index=destination_index_path,
-                                 from_data=destination_data_path,
-                                 to_index=self._blob.index.path,
-                                 to_data=self._blob.data.path)
+            if move_back:
+                self.move_back(source_blob_path=source_blob_path,
+                               destination_blob=destination_blob)
 
     def copy_valid_records(self, destination, overwrite=False, move_back=False, check_result=False):
         """Recover blob by copying only valid records from blob."""
-        basename = os.path.basename(self._blob.data.path)
-        blob_path = os.path.join(destination, basename)
 
-        if not is_destination_writable(self._blob.data.path,  blob_path, overwrite):
-            raise RuntimeError("can't copy valid records to already existing blob file: {}".format(blob_path))
+        source_blob_path = self._blob.data.path
+
+        basename = os.path.basename(source_blob_path)
+        destination_blob_path = os.path.join(destination, basename)
+
+        if not is_destination_writable(source_blob_path, destination_blob_path, overwrite):
+            raise RuntimeError("can't copy valid records to already existing blob file: {}".format(destination_blob_path))
 
         self._index_headers += self._stat.data_recoverable_headers
-        logging.info('Recovering blob %s -> %s', self._blob.data.path, blob_path)
+        logging.info('Recovering blob %s -> %s', source_blob_path, destination_blob_path)
 
         copied_records = 0
         copied_size = 0
 
-        with managed_blob(blob_path) as dst_blob:
-
-            destination_index_path, destination_blob_path = dst_blob.get_index_data_path_tuple()
+        with managed_blob(destination_blob_path, self._sorted_index_headers) as destination_blob:
 
             for header in self._index_headers:
-                copy_record(self._blob, dst_blob, header)
+                copy_record(self._blob, destination_blob, header)
                 copied_records += 1
                 copied_size += header.disk_size
 
             logging.info('I have copied %s (%s) records %s -> %s ',
                          copied_records,
                          sizeof_fmt(copied_size),
-                         self._blob.data.path,
-                         blob_path)
+                         source_blob_path,
+                         destination_blob_path)
 
-        if check_result and not BlobRepairer(blob_path).check(verify_csum=True, fast=False):
-            logging.error("check of fixed blob failed: path='%s'", blob_path)
-            raise RuntimeError('restored blob check has been failed')
+            if check_result:
+                if not BlobRepairer(destination_blob_path).check(verify_csum=True, fast=False):
+                    logging.error("Check of fixed blob failed: path='%s'", destination_blob_path)
+                    raise RuntimeError('restored blob check has been failed')
 
-        if move_back:
-            # Both destination and source blobs should be closed at this point.
-            self._blob.close()
-            to_index, to_data = self._blob.get_index_data_path_tuple()
+            if move_back:
+                self._move_back(source_blob_path=source_blob_path,
+                               destination_blob=destination_blob)
 
-            self._blob.move_back(from_index=destination_index_path,
-                                 from_data=destination_blob_path,
-                                 to_index=to_index,
-                                 to_data=to_data)
+    def _move_back(self, source_blob_path, destination_blob):
+        source_folder = os.path.abspath(source_blob_path)
+        source_folder = os.path.dirname(source_folder)
+
+        logging.info('Replacing blob: from="%s", remote_folder="%s"',
+                        destination_blob.data.path, source_folder)
+
+        # NOTE: blob's underlaying files would be deleted permanently.
+        self._blob.remove()
+        destination_blob.move_to(source_folder)
 
     def fix(self, destination, noprompt, overwrite=False, move_back=False, check_result=False):
         """Check blob's data & index and try to fix them if they are broken.
@@ -1309,7 +1429,8 @@ class BlobRepairer(object):
                 self.recover_index(self._blob.data,
                                    destination,
                                    overwrite=overwrite,
-                                   move_back=move_back)
+                                   move_back=move_back,
+                                   check_result=check_result)
             elif click.confirm('Should I try to recover both index and data from {}?'
                                .format(self._blob.data.path),
                                default=True):
@@ -1320,9 +1441,9 @@ class BlobRepairer(object):
         else:
             if not self._index_headers:
                 logging.error('Nothing can be recovered from %s, so it should be removed', self._blob.data.path)
-                filename = '{}{}'.format(
-                    os.path.join(destination, os.path.basename(self._blob.data.path)),
-                    TO_REMOVE_SUFFIX)
+                filename = os.path.basename(self._blob.data.path) + TO_REMOVE_SUFFIX
+                filename = os.path.join(destination, filename)
+
                 with open(filename, 'wb'):
                     pass
             elif noprompt or click.confirm('Should I repair {}?'.format(self._blob.data.path),
